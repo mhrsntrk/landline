@@ -108,6 +108,11 @@ final class Connection {
     /// failure closes instead of looping.
     private var retriedAfterSessionGone = false
     private var pingTimer: Timer?
+    /// Identifies the live transport. A cancelled URLSessionWebSocketTask still
+    /// delivers its failure asynchronously, so without this the old socket's
+    /// error tears down the socket that replaced it (seen on the SESSION_GONE
+    /// re-attach, where the retry could never succeed on its own).
+    private var epoch: UInt64 = 0
     private static let pingInterval: TimeInterval = 25
 
     init(makeTransport: @escaping () -> WebSocketTransport = { URLSessionWebSocketTransport() }) {
@@ -152,6 +157,10 @@ final class Connection {
             // Courtesy only: any transport drop is an implicit DETACH (PROTOCOL.md 6).
             transport?.send(ClientFrame.detach.encode()) { _ in }
         }
+        // Retire this epoch so the cancelled socket's asynchronous failure
+        // cannot report a disconnect over whatever comes next.
+        epoch &+= 1
+        transport?.onMessage = nil
         transport?.cancel()
         transport = nil
         state = .closed(reason: "disconnected")
@@ -161,20 +170,35 @@ final class Connection {
 
     private func openTransport() {
         guard let host else { return }
+        transport?.onMessage = nil
         transport?.cancel()
+
+        epoch &+= 1
+        let myEpoch = epoch
 
         state = .connecting
         let transport = makeTransport()
         self.transport = transport
         transport.onMessage = { [weak self] result in
-            DispatchQueue.main.async { self?.handleMessage(result) }
+            DispatchQueue.main.async {
+                guard let self, self.epoch == myEpoch else { return }
+                self.handleMessage(result)
+            }
         }
         transport.connect(url: host.wsURL)
 
         // URLSessionWebSocketTask queues sends until the handshake completes,
         // so ATTACH can go out immediately. It MUST be the first frame.
         state = .attaching
-        let attach = AttachReq(sessionID: resumeSessionID, cols: cols, rows: rows)
+        // An empty startCommand means "use whatever this machine defaults to",
+        // which the daemon resolves from its own default_cmd.
+        let startCommand = host.startCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attach = AttachReq(
+            sessionID: resumeSessionID,
+            cmd: startCommand.isEmpty ? nil : startCommand,
+            cols: cols,
+            rows: rows
+        )
         send(.attach(attach))
     }
 

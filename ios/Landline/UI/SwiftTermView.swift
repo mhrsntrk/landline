@@ -165,12 +165,29 @@ final class TerminalController {
     private(set) var metrics = FeedMetrics()
     let probe = FrameProbe()
 
-    /// A/B switch for measurement. `true` is the shipping path (one feed per
-    /// displayed frame). Launching with `-LandlineLegacyFeed` restores the
-    /// incumbent behaviour — one synchronous `TerminalView.feed` per WebSocket
-    /// message — so before/after numbers come off the identical workload on the
-    /// identical device rather than off two different builds.
-    let coalescing: Bool = !ProcessInfo.processInfo.arguments.contains("-LandlineLegacyFeed")
+    /// A/B switch for measurement, debug builds only. `true` is the shipping
+    /// path (one feed per displayed frame). Launching a debug build with
+    /// `-LandlineLegacyFeed` restores the incumbent behaviour — one synchronous
+    /// `TerminalView.feed` per WebSocket message — so before/after numbers come
+    /// off the identical workload on the identical device rather than off two
+    /// different builds. A release build always coalesces.
+    let coalescing: Bool = {
+        #if DEBUG
+        return !ProcessInfo.processInfo.arguments.contains("-LandlineLegacyFeed")
+        #else
+        return true
+        #endif
+    }()
+
+    /// The frame probe costs a permanently running display link, so it only runs
+    /// when someone asked for numbers.
+    private let measuring: Bool = {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["LANDLINE_PERF"] == "1"
+        #else
+        return false
+        #endif
+    }()
 
     /// Pending bytes plus the index of the first unconsumed one. Draining by
     /// advancing an index and compacting occasionally is O(n) total; repeated
@@ -206,7 +223,7 @@ final class TerminalController {
     func attach(to view: TerminalView) {
         terminalView = view
         if coalescing { startLink() }
-        probe.start()
+        if measuring { probe.start() }
     }
 
     func detach() {
@@ -273,15 +290,9 @@ final class TerminalController {
         )
     }
 
-    /// Drains the buffer immediately. Used by the local-echo path and at
-    /// teardown; normal output goes through the display link.
-    func flushNow() {
-        drain(budget: .infinity)
-    }
-
     func resetMetrics() {
         metrics = FeedMetrics()
-        probe.start()
+        if measuring { probe.start() }
     }
 
     private func startLink() {

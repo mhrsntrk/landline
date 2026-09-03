@@ -129,7 +129,7 @@ struct HostListView: View {
                     open(host)
                 } label: {
                     HostRow(host: host, level: reachability.level(for: host), now: now)
-                        .background(alignment: .top) { extentReporter }
+                        .background { extentReporter }
                 }
                 .buttonStyle(InstrumentRowButtonStyle())
                 .listRowInsets(EdgeInsets())

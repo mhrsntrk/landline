@@ -21,6 +21,9 @@ struct TerminalScreen: View {
     @State private var controller = TerminalController()
     @State private var state: Connection.State = .idle
     @State private var attached: AttachedResp?
+    /// Wall clock at the moment the session stopped, so the age readout freezes
+    /// instead of counting a session that is no longer running.
+    @State private var sessionEndedAt: Date?
 
     /// Live grid size, updated when SwiftTerm re-lays-out. A rare event, so
     /// letting it invalidate the header costs nothing.
@@ -101,7 +104,7 @@ struct TerminalScreen: View {
                     Spacer(minLength: Theme.Metric.grid * 2)
                     measured(label: "GEOM", value: "\(cols)×\(rows)")
                     measured(label: "AGE", value: nil) {
-                        SessionAgeReadout(createdAt: sessionCreatedAt)
+                        SessionAgeReadout(createdAt: sessionCreatedAt, endedAt: sessionEndedAt)
                     }
                 }
                 .padding(.trailing, Theme.Metric.gutter)
@@ -304,6 +307,27 @@ struct TerminalScreen: View {
         "\(host.hostname):\(host.port)"
     }
 
+    /// Turns a transport failure into one sentence. Foundation prefixes URL
+    /// errors with "The operation couldn't be completed.", which says nothing
+    /// and pushes the part that matters onto a second line.
+    private static func humanise(_ reason: String) -> String {
+        var text = reason
+        for boilerplate in ["The operation couldn\u{2019}t be completed.",
+                            "The operation couldn't be completed."] {
+            if let range = text.range(of: boilerplate) {
+                text.removeSubrange(range)
+            }
+        }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip a trailing "(NSPOSIXErrorDomain error 57.)" style qualifier.
+        if let paren = text.range(of: " (", options: .backwards), text.hasSuffix(")") {
+            text = String(text[text.startIndex..<paren.lowerBound])
+        }
+        guard !text.isEmpty else { return "The connection dropped." }
+        let sentence = "\(text.prefix(1).uppercased())\(text.dropFirst())"
+        return sentence.hasSuffix(".") ? sentence : sentence + "."
+    }
+
     /// Errors the daemon named come through as `CODE: message` (PROTOCOL.md);
     /// a plain transport close does not.
     private var closedIsError: Bool {
@@ -317,7 +341,7 @@ struct TerminalScreen: View {
     private func recoveryText(for reason: String) -> String {
         let parts = reason.split(separator: ":", maxSplits: 1)
         guard closedIsError, let code = parts.first else {
-            return "\(reason.prefix(1).uppercased())\(reason.dropFirst()). Reconnect to try again."
+            return "\(Self.humanise(reason)) Reconnect to try again."
         }
         switch String(code) {
         case ErrCode.sessionGone:
@@ -370,6 +394,7 @@ struct TerminalScreen: View {
         switch newState {
         case .live(let resp):
             attached = resp
+            sessionEndedAt = nil
             store.setLastSessionID(resp.sessionID, forHostID: host.id)
             // ATTACHED echoes the geometry we asked for, which is the placeholder
             // sent before SwiftTerm had a frame to measure. The laid-out grid is
@@ -401,6 +426,7 @@ struct TerminalScreen: View {
 
         case .closed, .idle:
             marksProgress = 0
+            if sessionEndedAt == nil { sessionEndedAt = Date() }
 
         case .connecting, .attaching:
             break
@@ -411,6 +437,7 @@ struct TerminalScreen: View {
         triedKeychainSecret = false
         typedSecret = ""
         marksProgress = 0
+        sessionEndedAt = nil
         ctrlLatched = false
         altLatched = false
         controller.resetMetrics()
@@ -431,9 +458,19 @@ struct TerminalScreen: View {
     /// keyboard.
     private func sendUserInput(_ data: Data) {
         guard !data.isEmpty else { return }
-        var payload = data
 
-        if ctrlLatched {
+        // Snapshot both latches before releasing either. Clearing one is a
+        // SwiftUI state write, and reading the other after that write is a
+        // read-after-write on the same update pass: Ctrl+Alt lost its ESC
+        // prefix that way, which is exactly the kind of imprecision this app
+        // cannot afford.
+        let ctrl = ctrlLatched
+        let alt = altLatched
+        if ctrl { ctrlLatched = false }
+        if alt { altLatched = false }
+
+        var payload = data
+        if ctrl {
             var first = payload[payload.startIndex]
             switch first {
             case 0x20:
@@ -446,15 +483,13 @@ struct TerminalScreen: View {
                 break
             }
             payload = Data([first]) + payload.dropFirst()
-            ctrlLatched = false
         }
 
         var out = Data()
-        if altLatched {
+        if alt {
             // Alt is the ESC prefix, which is what every terminal actually
             // sends for Meta. Applied after Ctrl so Alt+Ctrl+C is ESC 0x03.
             out.append(0x1b)
-            altLatched = false
         }
         out.append(payload)
         connection.send(.stdin(out))
@@ -503,11 +538,18 @@ private struct BackCellStyle: ButtonStyle {
 /// particular never the terminal.
 private struct SessionAgeReadout: View {
     let createdAt: Date?
+    /// When the session stopped. A clock that keeps counting after the process
+    /// exited is the app inventing state, which PRODUCT.md forbids.
+    var endedAt: Date?
 
     var body: some View {
         if let createdAt {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(Self.label(since: createdAt, now: context.date)).llValue()
+            if let endedAt {
+                Text(Self.label(since: createdAt, now: endedAt)).llValue(Theme.inkMuted)
+            } else {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(Self.label(since: createdAt, now: context.date)).llValue()
+                }
             }
         } else {
             Text("--:--:--").llValue(Theme.inkMuted)
