@@ -351,6 +351,8 @@ async fn run(args: Args) -> Result<i32> {
 
 #[tokio::main]
 async fn main() {
+    // wss:// needs a rustls CryptoProvider; tokio-tungstenite does not install one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args = Args::parse();
 
     // Restore the terminal even when unwinding, then run the default hook.
