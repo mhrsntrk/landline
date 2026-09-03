@@ -24,6 +24,9 @@ targets:
       path: Landline/Info.plist
       properties:
         ITSAppUsesNonExemptEncryption: false
+        UIAppFonts:
+          - JetBrainsMonoNerdFontMono-Regular.ttf
+          - JetBrainsMonoNerdFontMono-Bold.ttf
         UILaunchScreen: {}
         NSFaceIDUsageDescription: "Unlock your hosts."
         UISupportedInterfaceOrientations~iphone:

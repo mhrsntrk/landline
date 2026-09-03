@@ -254,3 +254,11 @@ service, no accounts, no backend to trust. No multi-user or team features: one p
 ## License
 
 MIT, across the whole repository, daemon and iOS client alike. See [LICENSE](LICENSE).
+
+## Third-party
+
+The terminal renders in [JetBrains Mono Nerd Font](https://github.com/ryanoasis/nerd-fonts),
+bundled in the iOS app under the SIL Open Font License 1.1 (`ios/Landline/Resources/Fonts/`).
+It replaces the system monospace font because prompt frameworks like starship and powerlevel10k
+draw their icons from the Private Use Area, which SF Mono has no glyphs for: every icon renders
+as tofu. Terminal emulation is [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT).

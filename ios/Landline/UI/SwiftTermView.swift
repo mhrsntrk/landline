@@ -391,13 +391,20 @@ final class TerminalController {
 
     func apply(fontSize: CGFloat) {
         guard let view = terminalView else { return }
-        // SF Mono via monospacedSystemFont. Explicit bold/italic faces so vim
-        // and tmux status lines do not fall back to a proportional face.
+        // Bundled JetBrains Mono Nerd Font Mono, not SF Mono. Prompts built
+        // with starship, powerlevel10k, or a patched vim theme draw their
+        // icons from the Private Use Area, which SF Mono has no glyphs for:
+        // every one of them renders as tofu. The "Mono" cut is deliberate,
+        // its icons are single cell width, so the grid stays aligned.
+        // Explicit bold and italic faces so vim and tmux status lines do not
+        // fall back to a proportional face.
+        let normal = TerminalFont.nerd(size: fontSize, bold: false)
+        let bold = TerminalFont.nerd(size: fontSize, bold: true)
         view.setFonts(
-            normal: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
-            bold: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold),
-            italic: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
-            boldItalic: UIFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
+            normal: normal,
+            bold: bold,
+            italic: normal,
+            boldItalic: bold
         )
     }
 }
@@ -405,6 +412,22 @@ final class TerminalController {
 // MARK: - Font size preference
 
 enum TerminalFont {
+    /// PostScript names of the bundled faces, read from the files themselves
+    /// rather than guessed: a wrong name fails silently back to the system
+    /// font, which looks like the tofu bug never got fixed.
+    private static let regularName = "JetBrainsMonoNFM-Regular"
+    private static let boldName = "JetBrainsMonoNFM-Bold"
+
+    /// The bundled Nerd Font at `size`, falling back to SF Mono if the font
+    /// failed to register (a missing UIAppFonts entry, say).
+    static func nerd(size: CGFloat, bold: Bool) -> UIFont {
+        if let font = UIFont(name: bold ? boldName : regularName, size: size) {
+            return font
+        }
+        assertionFailure("bundled Nerd Font missing; check UIAppFonts and the Resources/Fonts group")
+        return UIFont.monospacedSystemFont(ofSize: size, weight: bold ? .semibold : .regular)
+    }
+
     static let minSize: CGFloat = 9
     static let maxSize: CGFloat = 22
     static let defaultSize: CGFloat = 13
