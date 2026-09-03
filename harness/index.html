@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>landline</title>
+<link rel="stylesheet" href="https://unpkg.com/xterm@5.3.0/css/xterm.css">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b0b0b; overflow: hidden; }
+  #status {
+    position: fixed; top: 0; left: 0; right: 0; height: 22px; z-index: 10;
+    background: #1a1a1a; color: #9a9a9a; font: 12px/22px ui-monospace, Menlo, Consolas, monospace;
+    padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-bottom: 1px solid #2a2a2a; cursor: default;
+  }
+  #status.clickable { cursor: pointer; color: #e0c060; }
+  #term { position: fixed; top: 22px; left: 0; right: 0; bottom: 0; background: #0b0b0b; }
+</style>
+</head>
+<body>
+<div id="status">connecting…</div>
+<div id="term"></div>
+
+<script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://unpkg.com/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ---- frame codec: [u8 type][u32 len BE][payload] ----
+  function encodeFrame(type, payload) {
+    payload = payload || new Uint8Array(0);
+    const buf = new ArrayBuffer(5 + payload.length);
+    new DataView(buf).setUint8(0, type);
+    new DataView(buf).setUint32(1, payload.length, false);
+    new Uint8Array(buf, 5).set(payload);
+    return buf;
+  }
+  function decodeFrame(buf) {
+    const view = new DataView(buf);
+    const type = view.getUint8(0);
+    const len = view.getUint32(1, false);
+    return { type: type, payload: new Uint8Array(buf, 5, len) };
+  }
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  const toJson = (obj) => enc.encode(JSON.stringify(obj));
+  const fromJson = (payload) => JSON.parse(dec.decode(payload));
+
+  const TYPE = {
+    STDIN: 0x01, RESIZE: 0x02, ATTACH: 0x03, PING: 0x04, UNLOCK: 0x05, DETACH: 0x06, KILL: 0x07,
+    STDOUT: 0x81, ATTACHED: 0x82, EXIT: 0x83, PONG: 0x84, ERR: 0x85, NEED_UNLOCK: 0x86
+  };
+
+  const SESSION_KEY = 'landline_session';
+  const statusEl = document.getElementById('status');
+  function setStatus(text, clickable) {
+    statusEl.textContent = text;
+    statusEl.classList.toggle('clickable', !!clickable);
+  }
+
+  function wsUrl() {
+    if (location.protocol === 'file:') return 'ws://127.0.0.1:7777/v1/shell';
+    return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/v1/shell';
+  }
+
+  const term = new Terminal({ cursorBlink: true, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontSize: 13 });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(document.getElementById('term'));
+  fitAddon.fit();
+
+  let ws = null;
+  let triedWithoutSession = false;
+
+  function connect() {
+    triedWithoutSession = triedWithoutSession; // preserved across calls unless reset by caller
+    setStatus('connecting…');
+    ws = new WebSocket(wsUrl());
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = function () {
+      fitAddon.fit();
+      const attach = { proto_version: 1, cols: term.cols, rows: term.rows };
+      const sid = localStorage.getItem(SESSION_KEY);
+      if (sid) attach.session_id = sid;
+      ws.send(encodeFrame(TYPE.ATTACH, toJson(attach)));
+      setStatus('attaching…');
+    };
+
+    ws.onmessage = function (ev) {
+      const frame = decodeFrame(ev.data);
+      switch (frame.type) {
+        case TYPE.STDOUT:
+          term.write(frame.payload);
+          break;
+        case TYPE.ATTACHED: {
+          const info = fromJson(frame.payload);
+          localStorage.setItem(SESSION_KEY, info.session_id);
+          triedWithoutSession = false;
+          setStatus('attached · ' + info.session_id.slice(0, 8) + ' · ' + info.shell + '@' + info.host);
+          break;
+        }
+        case TYPE.NEED_UNLOCK: {
+          const info = fromJson(frame.payload);
+          const secret = prompt('Unlock required (attempts left: ' + info.attempts_left + ')');
+          if (secret !== null) ws.send(encodeFrame(TYPE.UNLOCK, enc.encode(secret)));
+          break;
+        }
+        case TYPE.ERR: {
+          const err = fromJson(frame.payload);
+          if (err.code === 'SESSION_GONE' && !triedWithoutSession) {
+            localStorage.removeItem(SESSION_KEY);
+            triedWithoutSession = true;
+            try { ws.close(); } catch (e) {}
+            connect();
+          } else {
+            setStatus('error: ' + err.code + ' — ' + err.message);
+          }
+          break;
+        }
+        case TYPE.EXIT: {
+          const view = new DataView(frame.payload.buffer, frame.payload.byteOffset, frame.payload.length);
+          const code = view.getUint32(0, false);
+          localStorage.removeItem(SESSION_KEY);
+          setStatus('exited (code ' + code + ')');
+          break;
+        }
+        case TYPE.PONG:
+          break;
+      }
+    };
+
+    ws.onclose = function () {
+      setStatus('disconnected — click to reconnect', true);
+      statusEl.onclick = function () {
+        statusEl.onclick = null;
+        connect();
+      };
+    };
+
+    ws.onerror = function () {
+      // onclose follows and handles UI state
+    };
+  }
+
+  term.onData(function (data) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(encodeFrame(TYPE.STDIN, enc.encode(data)));
+    }
+  });
+
+  function sendResize() {
+    fitAddon.fit();
+    const buf = new ArrayBuffer(4);
+    const view = new DataView(buf);
+    view.setUint16(0, term.cols, false);
+    view.setUint16(2, term.rows, false);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(encodeFrame(TYPE.RESIZE, new Uint8Array(buf)));
+    }
+  }
+  window.addEventListener('resize', sendResize);
+
+  connect();
+})();
+</script>
+</body>
+</html>

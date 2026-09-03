@@ -29,3 +29,13 @@ harness = []
 [dev-dependencies]
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+
+# cargo-deb packaging metadata; consumed by `cargo deb -p landlined` for the
+# Linux .deb build. See packaging/ for the rest of the release pipeline.
+[package.metadata.deb]
+maintainer = "mhrsntrk <m@mhrsntrk.com>"
+extended-description = "Landline host daemon: exposes local PTY sessions over a WebSocket API for the landline iOS app, meant to sit behind `tailscale serve` on the same host. Requires Tailscale to already be installed and running; it is not pulled in as a package dependency."
+depends = "libc6"
+assets = [
+    ["target/release/landlined", "usr/bin/", "755"],
+]

@@ -122,9 +122,10 @@ config and rejects everything else with 403 before the WebSocket upgrade complet
 ### 4.3 Loopback and local processes
 
 Tailscale documents that serve **strips incoming `Tailscale-*` headers before injecting its own**
-(see their `id-headers-demo` repository), so a tailnet peer cannot forge an identity. A fifteen
-minute empirical check at M2 confirms this on our tailscale version; after that, header identity
-is trusted from serve.
+(see their `id-headers-demo` repository), so a tailnet peer cannot forge an identity.
+**Verified empirically 2026-09-03 on tailscale 1.102.3**: a request through serve carrying a
+forged `Tailscale-User-Login` arrived at the backend with the forged value stripped and the
+real identity in its place. Header identity is trusted from serve.
 
 What remains is narrower: **any local process on the host can connect to `127.0.0.1:7777`
 directly**, bypassing serve, and supply its own headers. On a single-user MacBook this is close

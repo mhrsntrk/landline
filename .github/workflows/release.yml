@@ -1,0 +1,144 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # macOS: native build for both Apple Silicon and Intel from one arm64
+  # runner. Xcode ships both SDKs, so `rustup target add` is all that's
+  # needed for the x86_64 leg — no cross linker setup.
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - run: cargo build --release -p landlined --target ${{ matrix.target }}
+
+      # TODO(signing): codesign the binary with a Developer ID Application
+      # cert, then `xcrun notarytool submit --wait` + `xcrun stapler staple`
+      # go here once we have a cert. Unsigned binaries work fine for now;
+      # Gatekeeper just warns on first launch.
+
+      - name: Package
+        run: |
+          set -eu
+          out="landlined-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/landlined" "$out"
+          shasum -a 256 "$out" > "${out}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: landlined-${{ matrix.target }}
+          path: |
+            landlined-${{ matrix.target }}
+            landlined-${{ matrix.target }}.sha256
+          if-no-files-found: error
+
+  # Linux: both glibc targets cross-compiled from one x86_64 runner via
+  # cargo-zigbuild, which swaps in zig's bundled clang/lld + glibc sysroots
+  # instead of needing native cross toolchains installed. The `.2.31`
+  # target suffix pins the minimum glibc (Ubuntu 20.04's) so the binaries
+  # run on older distros too, not just whatever the runner has.
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - uses: mlugg/setup-zig@v1
+
+      - run: cargo install --locked cargo-zigbuild
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - run: cargo zigbuild --release -p landlined --target "${{ matrix.target }}.2.31"
+
+      - name: Package
+        run: |
+          set -eu
+          out="landlined-${{ matrix.target }}"
+          # cargo-zigbuild's output dir depends on how it interprets the
+          # glibc-version-suffixed target, so locate the binary rather than
+          # hardcoding target/<triple>/release.
+          bin="$(find target -type f -name landlined -path "*${{ matrix.target }}*release*" | head -n 1)"
+          cp "$bin" "$out"
+          sha256sum "$out" > "${out}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: landlined-${{ matrix.target }}
+          path: |
+            landlined-${{ matrix.target }}
+            landlined-${{ matrix.target }}.sha256
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo build --release -p landlined --target x86_64-pc-windows-msvc
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "landlined-x86_64-pc-windows-msvc.exe"
+          Copy-Item "target/x86_64-pc-windows-msvc/release/landlined.exe" $out
+          $hashLine = certutil -hashfile $out SHA256 | Select-String -Pattern '^[0-9A-Fa-f]{64}$'
+          $hash = $hashLine.Line.Trim().ToLower()
+          "$hash  $out" | Out-File -Encoding ascii "$out.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: landlined-x86_64-pc-windows-msvc
+          path: |
+            landlined-x86_64-pc-windows-msvc.exe
+            landlined-x86_64-pc-windows-msvc.exe.sha256
+          if-no-files-found: error
+
+  release:
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
