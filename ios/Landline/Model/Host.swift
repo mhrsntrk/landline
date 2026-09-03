@@ -57,6 +57,19 @@ struct Host: Codable, Identifiable, Hashable {
     /// Terminal colour scheme for this host.
     var colorScheme: TerminalColorScheme = .oneDarkPro
 
+    /// Family name of the face the terminal renders in, e.g. "Berkeley Mono".
+    /// Empty means the bundled JetBrains Mono Nerd Font, which is the default
+    /// and the only face guaranteed to carry prompt icons.
+    ///
+    /// A *family* name, not a PostScript name: the regular and bold faces are
+    /// picked out of the family by symbolic trait, so a family with only one
+    /// weight still works. Stored as a plain string rather than an enum because
+    /// the set of installed fonts is whatever configuration profiles the phone
+    /// happens to carry; a family that is no longer installed falls back to the
+    /// bundled face at render time rather than being rewritten in the store, so
+    /// re-installing the profile brings the choice back.
+    var fontFamily: String = ""
+
     // MARK: Daemon-reported cache
     //
     // The daemon is the source of truth (PRODUCT.md); these two are only the
@@ -118,7 +131,7 @@ struct Host: Codable, Identifiable, Hashable {
 extension Host {
     enum CodingKeys: String, CodingKey {
         case id, name, hostname, port, useTLS, requireFaceID, lastSessionID
-        case startCommand, colorScheme, lastShell, lastAttachedAt
+        case startCommand, colorScheme, fontFamily, lastShell, lastAttachedAt
     }
 
     /// Written by hand, not synthesised, because a `var` with a default still
@@ -137,6 +150,7 @@ extension Host {
         lastSessionID = try container.decodeIfPresent(String.self, forKey: .lastSessionID)
         startCommand = try container.decodeIfPresent(String.self, forKey: .startCommand) ?? ""
         colorScheme = try container.decodeIfPresent(TerminalColorScheme.self, forKey: .colorScheme) ?? .oneDarkPro
+        fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? ""
         lastShell = try container.decodeIfPresent(String.self, forKey: .lastShell)
         lastAttachedAt = try container.decodeIfPresent(Date.self, forKey: .lastAttachedAt)
     }

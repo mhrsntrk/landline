@@ -261,4 +261,8 @@ The terminal renders in [JetBrains Mono Nerd Font](https://github.com/ryanoasis/
 bundled in the iOS app under the SIL Open Font License 1.1 (`ios/Landline/Resources/Fonts/`).
 It replaces the system monospace font because prompt frameworks like starship and powerlevel10k
 draw their icons from the Private Use Area, which SF Mono has no glyphs for: every icon renders
-as tofu. Terminal emulation is [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT).
+as tofu. You can select any monospace font installed on the phone instead (a configuration
+profile from an app like iFont registers fonts system-wide); the bundled face then serves only
+the codepoints your font is missing, the same way Ghostty falls back to a symbols font.
+`ios/LandlineTests/Fixtures/PartialCoverageMono.ttf` is an OFL derivative of JetBrains Mono,
+subset to reproduce partial glyph coverage for the cascade tests. Terminal emulation is [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT).

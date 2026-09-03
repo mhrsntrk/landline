@@ -30,6 +30,7 @@ final class HostCodingTests: XCTestCase {
         XCTAssertTrue(host.useTLS)
         XCTAssertEqual(host.startCommand, "")
         XCTAssertEqual(host.colorScheme, .oneDarkPro)
+        XCTAssertEqual(host.fontFamily, "", "no stored font means the bundled Nerd Font")
         XCTAssertNil(host.lastShell)
         XCTAssertNil(host.lastAttachedAt)
     }
@@ -40,6 +41,7 @@ final class HostCodingTests: XCTestCase {
         XCTAssertEqual(host.hostname, "")
         XCTAssertEqual(host.port, 443)
         XCTAssertEqual(host.colorScheme, .oneDarkPro)
+        XCTAssertEqual(host.fontFamily, "")
     }
 
     func testUnknownPaletteFallsBackToDefault() throws {
@@ -53,12 +55,23 @@ final class HostCodingTests: XCTestCase {
         host.hostname = "rack.tail4f1a.ts.net"
         host.startCommand = "tmuxon"
         host.colorScheme = .matchSystem
+        host.fontFamily = "Berkeley Mono"
         host.lastShell = "/bin/zsh"
         let decoded = try XCTUnwrap(Host.decodeList(from: Host.encodeList([host])).first)
         XCTAssertEqual(decoded.startCommand, "tmuxon")
         XCTAssertEqual(decoded.colorScheme, .matchSystem)
+        XCTAssertEqual(decoded.fontFamily, "Berkeley Mono")
         XCTAssertEqual(decoded.lastShell, "/bin/zsh")
         XCTAssertEqual(decoded.id, host.id)
+    }
+
+    /// A font family is a plain string on purpose: the set of installed fonts
+    /// is whatever configuration profiles the phone happens to carry, so any
+    /// value must survive a round trip rather than being validated away.
+    func testStoredFontFamilySurvivesEvenWhenNotInstalled() throws {
+        let document = #"[{"hostname":"a.ts.net","fontFamily":"Berkeley Mono"}]"#
+        let host = try XCTUnwrap(Host.decodeList(from: Data(document.utf8)).first)
+        XCTAssertEqual(host.fontFamily, "Berkeley Mono")
     }
 
     func testValidation() {

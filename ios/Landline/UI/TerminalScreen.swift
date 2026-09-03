@@ -53,6 +53,12 @@ struct TerminalScreen: View {
         TerminalPalette.resolve(scheme: host.colorScheme, systemIsLight: systemIsLight)
     }
 
+    /// The face this host renders in. Empty is the bundled Nerd Font, and a
+    /// family whose configuration profile was removed while the app was away
+    /// resolves back to it rather than to some proportional substitute — see
+    /// `TerminalFont.font(family:size:bold:)`.
+    private var fontFamily: String { host.fontFamily }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -77,6 +83,11 @@ struct TerminalScreen: View {
             case .active:
                 systemIsLight = SystemAppearance.isLight
                 controller.apply(palette: palette)
+                // Re-asserted on the way back in for the same reason the palette
+                // is: a configuration profile can be added or removed while the
+                // app is in the background, which changes what this host's
+                // chosen family resolves to.
+                controller.apply(fontFamily: fontFamily, size: TerminalFont.size)
                 if case .closed = state { reconnect() }
                 if case .idle = state { reconnect() }
             default:
@@ -204,7 +215,7 @@ struct TerminalScreen: View {
 
     private var terminalRegion: some View {
         ZStack(alignment: .bottom) {
-            SwiftTermView(controller: controller, palette: palette)
+            SwiftTermView(controller: controller, palette: palette, fontFamily: fontFamily)
                 // The ring the registration marks live in, so a 6pt bracket
                 // never lands on the first glyph cell.
                 .padding(Theme.Metric.grid)

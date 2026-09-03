@@ -389,17 +389,27 @@ final class TerminalController {
         view.keyboardAppearance = palette.isDark ? .dark : .light
     }
 
-    func apply(fontSize: CGFloat) {
+    /// The family last applied, so the pinch gesture can resize without having
+    /// to be told again which face it is resizing. Empty is the bundled face.
+    private(set) var fontFamily: String = TerminalFont.bundledFamilySentinel
+
+    /// Resolved appearance in, exactly like `apply(palette:)`: the screen owns
+    /// the decision, this owns the UIKit consequences.
+    func apply(fontFamily: String, size: CGFloat) {
+        // Recorded even with no view attached, so the family survives the gap
+        // between a SwiftUI update and `makeUIView`.
+        self.fontFamily = fontFamily
         guard let view = terminalView else { return }
-        // Bundled JetBrains Mono Nerd Font Mono, not SF Mono. Prompts built
-        // with starship, powerlevel10k, or a patched vim theme draw their
-        // icons from the Private Use Area, which SF Mono has no glyphs for:
-        // every one of them renders as tofu. The "Mono" cut is deliberate,
-        // its icons are single cell width, so the grid stays aligned.
-        // Explicit bold and italic faces so vim and tmux status lines do not
-        // fall back to a proportional face.
-        let normal = TerminalFont.nerd(size: fontSize, bold: false)
-        let bold = TerminalFont.nerd(size: fontSize, bold: true)
+        // Bundled JetBrains Mono Nerd Font Mono unless the user picked a face,
+        // and cascaded behind it when they did — see `TerminalFont`. Prompts
+        // built with starship, powerlevel10k, or a patched vim theme draw their
+        // icons from the Private Use Area, which SF Mono and most side-loaded
+        // faces have no glyphs for: every one of them renders as tofu. The
+        // "Mono" cut is deliberate, its icons are single cell width, so the grid
+        // stays aligned. Explicit bold and italic faces so vim and tmux status
+        // lines do not fall back to a proportional face.
+        let normal = TerminalFont.font(family: fontFamily, size: size, bold: false)
+        let bold = TerminalFont.font(family: fontFamily, size: size, bold: true)
         view.setFonts(
             normal: normal,
             bold: bold,
@@ -409,14 +419,38 @@ final class TerminalController {
     }
 }
 
-// MARK: - Font size preference
+// MARK: - Font
 
+/// Which face the terminal draws in, and how a face the user installed is made
+/// safe to draw a prompt with.
+///
+/// The problem this type exists to solve: a font installed through an iOS
+/// configuration profile (iFont and friends) registers system-wide, so
+/// `UIFont(name:)` can see it from any app — but almost none of those fonts are
+/// Nerd Font patched. Berkeley Mono is not. Handing SwiftTerm a bare
+/// `UIFont(name: "BerkeleyMono", ...)` therefore brings the tofu bug straight
+/// back: starship, powerlevel10k and every patched vim theme draw their icons
+/// out of the Private Use Area, which an unpatched font has no glyphs for.
+///
+/// So the user's face is the *primary* and the bundled Nerd Font is a cascade
+/// fallback behind it. CoreText consults the cascade list per character, so
+/// letters and digits come from the user's font and only the PUA icons fall
+/// through to the bundled one. This works with SwiftTerm specifically because
+/// its Apple renderer shapes each row through `CTLineCreateWithAttributedString`
+/// and then reads each run's *resolved* font back out of
+/// `CTRunGetAttributes(run)[.font]` before drawing — so a substituted run is
+/// drawn in the font CoreText substituted, not in the primary.
 enum TerminalFont {
     /// PostScript names of the bundled faces, read from the files themselves
     /// rather than guessed: a wrong name fails silently back to the system
     /// font, which looks like the tofu bug never got fixed.
     private static let regularName = "JetBrainsMonoNFM-Regular"
     private static let boldName = "JetBrainsMonoNFM-Bold"
+
+    /// What `Host.fontFamily` holds for "use the bundled face".
+    static let bundledFamilySentinel = ""
+    /// Named in the picker so the bundled face is not mistaken for a system one.
+    static let bundledDisplayName = "JetBrains Mono NF (bundled)"
 
     /// The bundled Nerd Font at `size`, falling back to SF Mono if the font
     /// failed to register (a missing UIAppFonts entry, say).
@@ -427,6 +461,229 @@ enum TerminalFont {
         assertionFailure("bundled Nerd Font missing; check UIAppFonts and the Resources/Fonts group")
         return UIFont.monospacedSystemFont(ofSize: size, weight: bold ? .semibold : .regular)
     }
+
+    /// The family the bundled files actually register under. Read off the font
+    /// rather than written down, so a font update that changes the family name
+    /// cannot leave a stale literal behind.
+    static var bundledFamilyName: String {
+        UIFont(name: regularName, size: 12)?.familyName ?? "JetBrainsMono Nerd Font Mono"
+    }
+
+    /// `family` as the primary face with the bundled Nerd Font cascaded behind
+    /// it. An empty or uninstalled family is the bundled face outright.
+    ///
+    /// The bundled descriptor goes at the *head* of the cascade list and the
+    /// platform's own default list after it, because replacing the default list
+    /// outright would strand CJK, emoji and Arabic cells — a terminal has to be
+    /// able to render whatever the far end sends, not only what the chosen
+    /// family covers.
+    static func font(family: String, size: CGFloat, bold: Bool) -> UIFont {
+        let trimmed = family.trimmingCharacters(in: .whitespaces)
+        // `UIFont(descriptor:)` never returns nil: an unknown family silently
+        // resolves to Helvetica, which on a terminal grid is a disaster that
+        // looks like a rendering bug. Ask whether the family exists first.
+        guard !trimmed.isEmpty, isInstalled(family: trimmed) else {
+            return nerd(size: size, bold: bold)
+        }
+
+        guard let face = faceName(in: trimmed, bold: bold) else {
+            return nerd(size: size, bold: bold)
+        }
+        let descriptor = UIFontDescriptor(fontAttributes: [.name: face])
+            .addingAttributes([.cascadeList: cascadeList(size: size, bold: bold)])
+        return UIFont(descriptor: descriptor, size: size)
+    }
+
+    /// The concrete PostScript face to use out of `family`.
+    ///
+    /// Matching on `.family` and letting CoreText choose is what the obvious
+    /// implementation does, and it is wrong: the match is a nearest-neighbour
+    /// over every registered face, and on "Courier New" it cheerfully hands
+    /// back the *italic*. A terminal that silently turns italic because of a
+    /// font pick is worse than one that refuses the font. So the face is
+    /// chosen here, by weight, with italics excluded, and requested by exact
+    /// name — which is the one lookup CoreText cannot reinterpret.
+    ///
+    /// A family with no bold face lands on its regular face rather than a
+    /// synthesised smear, which is what a terminal wants.
+    private static func faceName(in family: String, bold: Bool) -> String? {
+        let names = UIFont.fontNames(forFamilyName: family)
+        let target: CGFloat = bold ? UIFont.Weight.bold.rawValue : UIFont.Weight.regular.rawValue
+        var best: (name: String, distance: CGFloat)?
+        for name in names {
+            guard let font = UIFont(name: name, size: 12) else { continue }
+            let descriptor = font.fontDescriptor
+            guard !descriptor.symbolicTraits.contains(.traitItalic) else { continue }
+            let traits = descriptor.object(forKey: .traits) as? [UIFontDescriptor.TraitKey: Any]
+            let weight = (traits?[.weight] as? CGFloat) ?? UIFont.Weight.regular.rawValue
+            let distance = abs(weight - target)
+            if best == nil || distance < best!.distance { best = (name, distance) }
+        }
+        // An italic-only family is still the family the user asked for; taking
+        // its one face beats swapping in a different font behind their back.
+        return best?.name ?? names.first
+    }
+
+    /// The bundled face first, then whatever the platform would have cascaded
+    /// to anyway.
+    private static func cascadeList(size: CGFloat, bold: Bool) -> [UIFontDescriptor] {
+        let bundled = UIFontDescriptor(fontAttributes: [.name: bold ? boldName : regularName])
+        return [bundled] + systemCascade(size: size)
+    }
+
+    /// The platform's own fallback chain, re-expressed as `UIFontDescriptor`s.
+    ///
+    /// The conversion is not ceremony. On iOS `UIFontDescriptor` is *not* toll
+    /// free bridged to `CTFontDescriptorRef` (unlike `NSFontDescriptor` on the
+    /// Mac), so `CTFontCopyDefaultCascadeListForLanguages(...) as? [UIFontDescriptor]`
+    /// quietly yields nil and the whole default chain vanishes — which showed
+    /// up as a terminal that could no longer draw a CJK or Arabic cell the
+    /// moment the user picked a Latin-only family. Copying the name attribute
+    /// across is enough: every entry in the default list names a concrete face.
+    private static func systemCascade(size: CGFloat) -> [UIFontDescriptor] {
+        let base = UIFont.monospacedSystemFont(ofSize: size, weight: .regular) as CTFont
+        guard let raw = CTFontCopyDefaultCascadeListForLanguages(base, nil) as? [CTFontDescriptor]
+        else {
+            assertionFailure("no default cascade list; non-Latin cells will render as tofu")
+            return []
+        }
+        return raw.compactMap { descriptor in
+            guard let name = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute)
+                as? String else { return nil }
+            return UIFontDescriptor(fontAttributes: [.name: name])
+        }
+    }
+
+    /// True when at least one face is registered under this family name. This
+    /// is the only reliable "does this font exist" question on iOS.
+    static func isInstalled(family: String) -> Bool {
+        !UIFont.fontNames(forFamilyName: family).isEmpty
+    }
+
+    // MARK: Enumeration
+
+    /// Every monospaced family the phone can see, bundled face excluded (it is
+    /// offered separately, as the default), sorted and deduplicated.
+    ///
+    /// Fonts installed by a configuration profile land in `UIFont.familyNames`
+    /// like any other — that part is just iOS 13+ behaviour. The catch is the
+    /// detection: plenty of hand-built monospaced fonts never set the
+    /// `isFixedPitch`/`traitMonoSpace` flag in their OS/2 table, so trusting the
+    /// symbolic trait alone would hide exactly the font someone went to the
+    /// trouble of side-loading. Measuring four glyphs that differ wildly in a
+    /// proportional face is what actually catches those.
+    static func availableMonospaceFamilies() -> [String] {
+        let bundled = bundledFamilyName
+        var found: Set<String> = []
+        for family in UIFont.familyNames where family != bundled {
+            if isMonospaced(family: family) { found.insert(family) }
+        }
+        return found.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    /// A family counts as monospaced if any of its faces declares the trait or
+    /// measures as fixed pitch.
+    static func isMonospaced(family: String) -> Bool {
+        for name in UIFont.fontNames(forFamilyName: family) {
+            guard let font = UIFont(name: name, size: probeSize) else { continue }
+            if font.fontDescriptor.symbolicTraits.contains(.traitMonoSpace) { return true }
+            if hasUniformAdvances(font) { return true }
+        }
+        return false
+    }
+
+    /// Whether a family covers the Private Use Area codepoints a prompt draws.
+    /// Only the bundled face is expected to; the answer is what the picker uses
+    /// to tell the truth about a chosen font rather than to guess.
+    static func hasPromptIcons(family: String) -> Bool {
+        guard let name = UIFont.fontNames(forFamilyName: family).first,
+              let font = UIFont(name: name, size: probeSize) else { return false }
+        return promptIconCodepoints.allSatisfy { glyph(for: $0, in: font) != 0 }
+    }
+
+    /// Powerline branch and separator, plus a Nerd Font device icon. Three
+    /// codepoints from three different blocks, so a font that patched only one
+    /// range does not read as fully patched.
+    static let promptIconCodepoints: [UnicodeScalar] = [
+        UnicodeScalar(0xE0A0)!, UnicodeScalar(0xE0B0)!, UnicodeScalar(0xF07C)!,
+    ]
+
+    /// Big enough that rounding cannot make two different advances compare
+    /// equal, small enough to cost nothing.
+    private static let probeSize: CGFloat = 64
+
+    /// 0 is the missing-glyph slot, which is the tofu box.
+    static func glyph(for scalar: UnicodeScalar, in font: UIFont) -> CGGlyph {
+        var chars = Array(String(scalar).utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: chars.count)
+        guard CTFontGetGlyphsForCharacters(font as CTFont, &chars, &glyphs, chars.count) else {
+            return 0
+        }
+        // A surrogate pair maps to one glyph in the first slot.
+        return glyphs.first ?? 0
+    }
+
+    /// "i", "W", "1" and " " have wildly different advances in a proportional
+    /// face and identical ones in a fixed-pitch face.
+    private static func hasUniformAdvances(_ font: UIFont) -> Bool {
+        let ct = font as CTFont
+        var chars: [UniChar] = Array("iW1 ".utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: chars.count)
+        // False if any of the four is missing, which disqualifies symbol and
+        // icon fonts before they can accidentally measure uniform.
+        guard CTFontGetGlyphsForCharacters(ct, &chars, &glyphs, chars.count) else { return false }
+        guard glyphs.allSatisfy({ $0 != 0 }) else { return false }
+        var advances = [CGSize](repeating: .zero, count: glyphs.count)
+        CTFontGetAdvancesForGlyphs(ct, .horizontal, &glyphs, &advances, glyphs.count)
+        guard let first = advances.first, first.width > 0 else { return false }
+        return advances.allSatisfy { abs($0.width - first.width) < 0.01 }
+    }
+
+    // MARK: Picker options
+
+    /// One row of the font picker.
+    struct Option: Identifiable, Hashable {
+        /// Exactly what goes in `Host.fontFamily`; empty is the bundled face.
+        let family: String
+        /// Set in the family it names, so the choice is visible.
+        let displayName: String
+        /// The family carries the Private Use Area icons a prompt draws.
+        let hasPromptIcons: Bool
+        /// Stored on this host but not currently registered on the phone —
+        /// the configuration profile was removed, most likely.
+        let isMissing: Bool
+
+        var id: String { family }
+        var isBundled: Bool { family.isEmpty }
+    }
+
+    /// The bundled face first, then every monospaced family the phone can see.
+    /// `selected` is included even when it is no longer installed, so a removed
+    /// profile shows up as a named, recoverable state instead of the setting
+    /// appearing to have reset itself.
+    static func options(selected: String = "") -> [Option] {
+        var options: [Option] = [
+            Option(family: bundledFamilySentinel,
+                   displayName: bundledDisplayName,
+                   hasPromptIcons: true,
+                   isMissing: false)
+        ]
+        var families = availableMonospaceFamilies()
+        let trimmed = selected.trimmingCharacters(in: .whitespaces)
+        let missing = !trimmed.isEmpty && !families.contains(trimmed) && trimmed != bundledFamilyName
+        if missing { families.append(trimmed) }
+        for family in families {
+            options.append(Option(family: family,
+                                  displayName: family,
+                                  hasPromptIcons: missing && family == trimmed
+                                      ? false
+                                      : hasPromptIcons(family: family),
+                                  isMissing: missing && family == trimmed))
+        }
+        return options
+    }
+
+    // MARK: Size
 
     static let minSize: CGFloat = 9
     static let maxSize: CGFloat = 22
@@ -455,6 +712,9 @@ enum TerminalFont {
 struct SwiftTermView: UIViewRepresentable {
     let controller: TerminalController
     let palette: TerminalPalette
+    /// Resolved the same way `palette` is: the screen reads it off the host and
+    /// hands the answer down. Empty is the bundled Nerd Font.
+    let fontFamily: String
 
     func makeUIView(context: Context) -> TerminalView {
         var options = TerminalOptions.default
@@ -484,7 +744,7 @@ struct SwiftTermView: UIViewRepresentable {
 
         controller.attach(to: view)
         controller.apply(palette: palette)
-        controller.apply(fontSize: TerminalFont.size)
+        controller.apply(fontFamily: fontFamily, size: TerminalFont.size)
 
         let pinch = UIPinchGestureRecognizer(target: context.coordinator,
                                              action: #selector(Coordinator.handlePinch(_:)))
@@ -527,7 +787,9 @@ struct SwiftTermView: UIViewRepresentable {
                 let clamped = min(TerminalFont.maxSize, max(TerminalFont.minSize, target))
                 guard clamped != TerminalFont.size else { return }
                 TerminalFont.size = clamped
-                controller.apply(fontSize: clamped)
+                // The family is not the pinch's business; it resizes whatever
+                // face is already installed.
+                controller.apply(fontFamily: controller.fontFamily, size: clamped)
             default:
                 break
             }
