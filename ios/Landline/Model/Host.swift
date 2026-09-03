@@ -6,7 +6,7 @@ import Foundation
 /// commitment). `matchSystem` is the escape hatch for someone who wants the
 /// phone to follow iOS light/dark instead. More palettes get added later, so
 /// decoding tolerates raw values this build has never heard of.
-enum TerminalPalette: String, Codable, CaseIterable, Identifiable, Hashable {
+enum TerminalColorScheme: String, Codable, CaseIterable, Identifiable, Hashable {
     case oneDarkPro
     case matchSystem
 
@@ -32,7 +32,7 @@ enum TerminalPalette: String, Codable, CaseIterable, Identifiable, Hashable {
     /// to read the host list; fall back to the default instead of throwing.
     init(from decoder: any Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = TerminalPalette(rawValue: raw) ?? .oneDarkPro
+        self = TerminalColorScheme(rawValue: raw) ?? .oneDarkPro
     }
 }
 
@@ -55,7 +55,7 @@ struct Host: Codable, Identifiable, Hashable {
     var startCommand: String = ""
 
     /// Terminal colour scheme for this host.
-    var colorScheme: TerminalPalette = .oneDarkPro
+    var colorScheme: TerminalColorScheme = .oneDarkPro
 
     // MARK: Daemon-reported cache
     //
@@ -136,7 +136,7 @@ extension Host {
         requireFaceID = try container.decodeIfPresent(Bool.self, forKey: .requireFaceID) ?? false
         lastSessionID = try container.decodeIfPresent(String.self, forKey: .lastSessionID)
         startCommand = try container.decodeIfPresent(String.self, forKey: .startCommand) ?? ""
-        colorScheme = try container.decodeIfPresent(TerminalPalette.self, forKey: .colorScheme) ?? .oneDarkPro
+        colorScheme = try container.decodeIfPresent(TerminalColorScheme.self, forKey: .colorScheme) ?? .oneDarkPro
         lastShell = try container.decodeIfPresent(String.self, forKey: .lastShell)
         lastAttachedAt = try container.decodeIfPresent(Date.self, forKey: .lastAttachedAt)
     }

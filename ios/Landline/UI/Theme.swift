@@ -354,6 +354,16 @@ struct StatusSquare: View {
     }
 }
 
+/// A sentence a human wrote, with backticked spans rendered in mono so a
+/// machine value inside prose never sets in SF Pro. `Text(String)` does not
+/// parse markdown the way `Text("literal")` does, hence the explicit parse.
+func proseText(_ string: String) -> Text {
+    if let attributed = try? AttributedString(markdown: string) {
+        return Text(attributed)
+    }
+    return Text(string)
+}
+
 /// The uppercase, tracked, mono annotation label.
 struct MicroLabel: View {
     private let text: String
@@ -383,7 +393,7 @@ struct InstrumentRowButtonStyle: ButtonStyle {
     }
 
     private struct StatefulBody: View {
-        let configuration: Configuration
+        let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.isFocused) private var isFocused
 
@@ -417,8 +427,8 @@ struct InstrumentButtonStyle: ButtonStyle {
     }
 
     private struct StatefulBody: View {
-        let configuration: Configuration
-        let emphasis: Emphasis
+        let configuration: ButtonStyleConfiguration
+        let emphasis: InstrumentButtonStyle.Emphasis
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.isFocused) private var isFocused
 
@@ -474,7 +484,7 @@ struct InstrumentToggle: View {
             }
             .frame(minHeight: Theme.Metric.hitTarget)
             if let note {
-                Text(note)
+                proseText(note)
                     .llProse(Theme.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -529,7 +539,7 @@ struct FieldRow<Content: View>: View {
                 HStack(alignment: .top, spacing: Theme.Metric.grid * 2) {
                     MicroLabel("ERR", color: Theme.alert)
                         .padding(.top, 1)
-                    Text(error)
+                    proseText(error)
                         .llProse(Theme.alert)
                         .fixedSize(horizontal: false, vertical: true)
                 }

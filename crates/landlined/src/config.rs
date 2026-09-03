@@ -174,16 +174,31 @@ fn non_blank(value: &str) -> Option<&str> {
 /// Run `command` through `shell`.
 #[cfg(unix)]
 fn shell_command(shell: &str, command: &str) -> (String, Vec<String>) {
-    // `-i` is deliberate and load-bearing, not a stray flag. A startup
-    // command is written by a human in their own config, so it routinely
-    // names an alias, a shell function, or a binary on an rc-file PATH, and
-    // none of those exist in a non-interactive shell: `zsh -c 'tmuxon'`
-    // fails with "command not found" while `zsh -i -c 'tmuxon'` works,
-    // because only interactive mode sources ~/.zshrc. Dropping `-i` here
-    // silently breaks every alias-based startup command.
+    // Both flags are load-bearing, and each fixes a different failure.
+    //
+    // `-i` sources the interactive rc file (~/.zshrc, ~/.bashrc), which is
+    // where aliases and shell functions live. A startup command is written
+    // by a human in their own config, so it routinely names one:
+    // `zsh -c 'tmuxon'` fails with "command not found" where
+    // `zsh -i -c 'tmuxon'` resolves the alias.
+    //
+    // `-l` sources the login profile (~/.zprofile, ~/.profile), which is
+    // where PATH is usually assembled, including Homebrew's `shellenv`.
+    // This matters because the daemon runs under launchd or systemd, which
+    // hand it a minimal PATH rather than a shell's. Verified on macOS: with
+    // `-i` alone the alias resolves but then dies on "command not found:
+    // tmux", because /opt/homebrew/bin was never added to PATH.
+    //
+    // Drop either flag and alias-based startup commands break, in two
+    // different and equally confusing ways.
     (
         shell.to_string(),
-        vec!["-i".to_string(), "-c".to_string(), command.to_string()],
+        vec![
+            "-l".to_string(),
+            "-i".to_string(),
+            "-c".to_string(),
+            command.to_string(),
+        ],
     )
 }
 
@@ -222,10 +237,15 @@ fn shell_command(shell: &str, command: &str) -> (String, Vec<String>) {
     } else {
         // Anything else configured as the shell on Windows is almost
         // certainly a Unix-style shell (Git for Windows bash, MSYS2), so
-        // use the Unix flags.
+        // use the Unix flags, for the same two reasons documented there.
         (
             shell.to_string(),
-            vec!["-i".to_string(), "-c".to_string(), command.to_string()],
+            vec![
+                "-l".to_string(),
+                "-i".to_string(),
+                "-c".to_string(),
+                command.to_string(),
+            ],
         )
     }
 }
@@ -348,7 +368,7 @@ mod tests {
     fn resolve_command_prefers_attach_cmd() {
         let (program, args) = resolve_command("/bin/zsh", "tmuxon", Some("htop"));
         assert_eq!(program, "/bin/zsh");
-        assert_eq!(args, ["-i", "-c", "htop"]);
+        assert_eq!(args, ["-l", "-i", "-c", "htop"]);
     }
 
     #[cfg(unix)]
@@ -356,7 +376,7 @@ mod tests {
     fn resolve_command_falls_back_to_default_cmd() {
         let (program, args) = resolve_command("/bin/zsh", "tmuxon", None);
         assert_eq!(program, "/bin/zsh");
-        assert_eq!(args, ["-i", "-c", "tmuxon"]);
+        assert_eq!(args, ["-l", "-i", "-c", "tmuxon"]);
     }
 
     #[cfg(unix)]
@@ -372,13 +392,13 @@ mod tests {
     fn resolve_command_treats_blank_as_absent() {
         // Blank ATTACH cmd falls through to default_cmd.
         let (_, args) = resolve_command("/bin/zsh", "tmuxon", Some("   "));
-        assert_eq!(args, ["-i", "-c", "tmuxon"]);
+        assert_eq!(args, ["-l", "-i", "-c", "tmuxon"]);
         // Blank default_cmd falls through to the plain shell.
         let (_, args) = resolve_command("/bin/zsh", "  \t ", None);
         assert_eq!(args, ["-l"]);
         // Surrounding whitespace is trimmed off a real command.
         let (_, args) = resolve_command("/bin/zsh", "", Some(" tmuxon\n"));
-        assert_eq!(args, ["-i", "-c", "tmuxon"]);
+        assert_eq!(args, ["-l", "-i", "-c", "tmuxon"]);
     }
 
     #[cfg(unix)]
@@ -393,7 +413,12 @@ mod tests {
             config.resolve_command(None),
             (
                 "/usr/bin/fish".to_string(),
-                vec!["-i".to_string(), "-c".to_string(), "tmuxon".to_string()]
+                vec![
+                    "-l".to_string(),
+                    "-i".to_string(),
+                    "-c".to_string(),
+                    "tmuxon".to_string()
+                ]
             )
         );
     }
