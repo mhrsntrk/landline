@@ -9,7 +9,7 @@
 //! against `Config::unlock_hash`.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use argon2::password_hash::PasswordHash;
 use argon2::{Argon2, PasswordVerifier};
@@ -71,18 +71,33 @@ pub enum UnlockOutcome {
 
 /// Per-daemon unlock state: the configured argon2id hash plus a global
 /// failure counter shared by every connection.
+/// How long the gate stays shut once the failure budget is spent.
+///
+/// A permanent lock-out would be a denial of service: anyone who can reach
+/// the unlock stage could spend the budget and keep the owner out until the
+/// daemon restarts, which is the one thing they cannot do remotely. A cooling
+/// period keeps brute force pointless (ten argon2id guesses per window) while
+/// letting legitimate access recover on its own.
+pub const LOCKOUT: Duration = Duration::from_secs(15 * 60);
+
+#[derive(Default)]
+struct GateState {
+    failures: u32,
+    locked_until: Option<Instant>,
+}
+
 #[derive(Clone)]
 pub struct UnlockGate {
     /// PHC-format argon2id hash; empty means unlock is not required.
     hash: Arc<str>,
-    failures: Arc<Mutex<u32>>,
+    state: Arc<Mutex<GateState>>,
 }
 
 impl UnlockGate {
     pub fn new(unlock_hash: String) -> Self {
         UnlockGate {
             hash: unlock_hash.into(),
-            failures: Arc::new(Mutex::new(0)),
+            state: Arc::new(Mutex::new(GateState::default())),
         }
     }
 
@@ -91,14 +106,25 @@ impl UnlockGate {
         !self.hash.is_empty()
     }
 
-    /// True once the failure budget is exhausted.
+    /// True while the failure budget is spent and the cooling period runs.
+    ///
+    /// Expiry is evaluated lazily here, so a caller that waits out `LOCKOUT`
+    /// finds the gate open again with a fresh budget.
     pub fn locked_out(&self) -> bool {
-        *self.failures.lock().unwrap() >= MAX_UNLOCK_FAILURES
+        let mut state = self.state.lock().unwrap();
+        match state.locked_until {
+            Some(until) if Instant::now() >= until => {
+                *state = GateState::default();
+                false
+            }
+            Some(_) => true,
+            None => false,
+        }
     }
 
     /// Attempts remaining before lock-out.
     pub fn attempts_left(&self) -> u32 {
-        MAX_UNLOCK_FAILURES.saturating_sub(*self.failures.lock().unwrap())
+        MAX_UNLOCK_FAILURES.saturating_sub(self.state.lock().unwrap().failures)
     }
 
     /// Verifies `secret` against the configured hash.
@@ -130,14 +156,17 @@ impl UnlockGate {
         .unwrap_or(false);
 
         if ok {
-            *self.failures.lock().unwrap() = 0;
+            *self.state.lock().unwrap() = GateState::default();
             return UnlockOutcome::Unlocked;
         }
 
         let failures = {
-            let mut failures = self.failures.lock().unwrap();
-            *failures += 1;
-            *failures
+            let mut state = self.state.lock().unwrap();
+            state.failures += 1;
+            if state.failures >= MAX_UNLOCK_FAILURES {
+                state.locked_until = Some(Instant::now() + LOCKOUT);
+            }
+            state.failures
         };
         if failures >= MAX_UNLOCK_FAILURES {
             return UnlockOutcome::LockedOut;
@@ -147,5 +176,54 @@ impl UnlockGate {
         UnlockOutcome::Wrong {
             attempts_left: MAX_UNLOCK_FAILURES - failures,
         }
+    }
+}
+
+#[cfg(test)]
+mod lockout_tests {
+    use super::*;
+
+    fn hash_of(secret: &str) -> String {
+        use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(secret.as_bytes(), &salt)
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn lockout_expires_and_restores_the_budget() {
+        let gate = UnlockGate::new(hash_of("correct-horse"));
+        {
+            let mut state = gate.state.lock().unwrap();
+            state.failures = MAX_UNLOCK_FAILURES;
+            // Already elapsed: stands in for a cooling period that has run out.
+            state.locked_until = Some(Instant::now() - Duration::from_secs(1));
+        }
+        assert!(
+            !gate.locked_out(),
+            "an expired lock-out must reopen the gate"
+        );
+        assert_eq!(gate.attempts_left(), MAX_UNLOCK_FAILURES);
+        assert!(matches!(
+            gate.verify("correct-horse".to_string()).await,
+            UnlockOutcome::Unlocked
+        ));
+    }
+
+    #[tokio::test]
+    async fn lockout_holds_while_the_cooling_period_runs() {
+        let gate = UnlockGate::new(hash_of("correct-horse"));
+        {
+            let mut state = gate.state.lock().unwrap();
+            state.failures = MAX_UNLOCK_FAILURES;
+            state.locked_until = Some(Instant::now() + LOCKOUT);
+        }
+        assert!(gate.locked_out());
+        assert!(matches!(
+            gate.verify("correct-horse".to_string()).await,
+            UnlockOutcome::LockedOut
+        ));
     }
 }

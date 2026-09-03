@@ -60,7 +60,7 @@ iPhone (Tailscale app active)
    v
 tailscale serve :443
    |
-   |  HTTP / WS  ->  127.0.0.1:7777  (or unix socket, see 4.3)
+   |  HTTP / WS  ->  127.0.0.1:7777  (loopback only, see 4.3)
    v
 landlined
    |
@@ -134,7 +134,7 @@ to irrelevant. On the Ubuntu server it is not.
 `tailscale serve` has no unix socket backend, so filesystem permissions cannot be the boundary.
 Two real options:
 
-1. **Accept it on single-user machines, document it loudly.** The unlock secret (4.4) still
+1. **Accept it on single-user machines, document it loudly.** The unlock secret (4.5) still
    stands between a local process and a shell it does not already have.
 2. **Hardened mode, no serve at all:** bind the daemon to the machine's tailnet `100.x` address
    and identify each peer via the tailscaled LocalAPI WhoIs endpoint
@@ -148,7 +148,14 @@ v0 ships option 1 with serve. Option 2 is the designed escape hatch if the daemo
 a genuinely multi-user machine, and nothing in the protocol or client depends on which one is in
 front.
 
-### 4.4 Unlock secret
+### 4.4 The admin socket
+
+`landlined sessions list` and `kill` talk to the daemon over a unix socket next to the config
+file, mode 0700. It has no authentication of its own: anything running as your user can list and
+kill your sessions. That is the same trust level as the loopback listener above, and on Windows
+the socket does not exist at all, which is why `sessions` is unavailable there.
+
+### 4.5 Unlock secret
 
 Identity proves *which tailnet user* is calling. It does not prove the phone is in your hands.
 So, independently of Tailscale:
@@ -156,12 +163,15 @@ So, independently of Tailscale:
 - Optional per-host unlock secret, argon2id hashed in the daemon config, never stored on the
   phone in plaintext.
 - Verified over the WebSocket **before any PTY is spawned**.
-- Exponential backoff, then lockout, on repeated failures.
+- Exponential backoff on repeated failures, then a 15 minute lock-out.
+  The lock-out is deliberately time-limited rather than permanent: a lock that
+  only a daemon restart could clear would let anyone who reaches the unlock
+  stage deny you the very access you are away from the machine to use.
 - Face ID / passcode gate on app foreground, enforced client side.
 
 Set it on the Ubuntu server. Probably skip it on the laptop. Make it per-host, not global.
 
-### 4.5 What is deliberately not defended against
+### 4.6 What is deliberately not defended against
 
 - A compromised tailnet coordination server. Tailscale's threat model is inherited wholesale.
 - A rooted or jailbroken phone with the app unlocked.
@@ -268,7 +278,7 @@ TOML, at `~/.config/landline/config.toml`, `~/Library/Application Support/landli
 `%APPDATA%\landline\config.toml`.
 
 ```toml
-listen            = "127.0.0.1:7777"   # or unix:/run/user/1000/landline.sock
+listen            = "127.0.0.1:7777"   # loopback TCP; see 4.3 on why not a unix socket
 allowed_logins    = ["you@example.com"]
 shell             = ""                  # empty = $SHELL; on Windows pwsh, then powershell.exe
 session_ttl_hours = 24

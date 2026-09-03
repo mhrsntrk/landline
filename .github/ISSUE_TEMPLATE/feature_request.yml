@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose something new for landlined or the iOS app.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Landline has a deliberately narrow scope. Read the non-goals in
+        [`docs/SCOPE.md`](https://github.com/mhrsntrk/landline/blob/main/docs/SCOPE.md) before filling this in: screen sharing or remote
+        desktop, a file manager or SFTP browser, a port forwarding UI, Android or web clients,
+        a hosted service, and accounts or team features are all declined regardless of how good
+        the proposal is.
+
+  - type: checkboxes
+    id: read-non-goals
+    attributes:
+      label: Non-goals check
+      options:
+        - label: >
+            I've read the non-goals in docs/SCOPE.md and this request is not one of them.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that landline doesn't support today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like landline to do instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways to solve the problem, including workarounds you're using now.
+    validations:
+      required: false

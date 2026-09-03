@@ -1,0 +1,102 @@
+name: Bug report
+description: Something in landlined or the iOS app is broken.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this. The single most useful thing you can
+        attach is the output of `landlined doctor`, so please run it before filling this in.
+
+  - type: checkboxes
+    id: not-security
+    attributes:
+      label: This is not a security vulnerability
+      description: >
+        If you found a way to reach a shell without authorization, read another user's
+        session, or otherwise bypass the security model in docs/SCOPE.md, please use a
+        private security advisory instead of a public issue.
+      options:
+        - label: >
+            I confirm this is a functional bug, not a security vulnerability, and that if it
+            were one I'd use the private advisory flow instead.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, and what went wrong?
+      placeholder: |
+        I ran `landlined serve`, opened the iOS app, tapped connect on my Mac, and got...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Full output of `landlined doctor`
+      description: >
+        Run `landlined doctor` on the host and paste the entire output, unedited. This is the
+        single most useful field on this form.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: host-os
+    attributes:
+      label: Host OS and version
+      placeholder: "macOS 15.1 / Ubuntu 24.04 / Windows 11 23H2"
+    validations:
+      required: true
+
+  - type: input
+    id: daemon-version
+    attributes:
+      label: landlined version
+      description: Output of `landlined --version`.
+    validations:
+      required: true
+
+  - type: input
+    id: ios-version
+    attributes:
+      label: iOS version and app build (if relevant)
+      placeholder: "iOS 18.1, build 1.2.0 (3)"
+    validations:
+      required: false
+
+  - type: input
+    id: tailscale-version
+    attributes:
+      label: Tailscale version
+      description: Output of `tailscale version`, on the host and, if relevant, on the phone.
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Logs, config (with secrets redacted), screenshots, whatever seems relevant.
+    validations:
+      required: false
