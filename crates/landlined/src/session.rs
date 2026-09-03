@@ -149,8 +149,14 @@ pub struct Attachment {
 pub struct AttachArgs {
     /// `None` creates a new session; `Some` resumes an existing one.
     pub session_id: Option<Uuid>,
-    /// Program to spawn for a new session (already resolved).
+    /// Program to spawn for a new session, already resolved by the caller
+    /// (see [`crate::config::resolve_command`], which turns the ATTACH
+    /// `cmd`, the `default_cmd` config key, and the configured shell into
+    /// the program and argv actually spawned).
     pub program: String,
+    /// argv for `program`, e.g. `["-l"]` for a plain login shell or
+    /// `["-i", "-c", "tmuxon"]` for a startup command.
+    pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub cols: u16,
     pub rows: u16,
@@ -164,6 +170,9 @@ pub enum AttachError {
 }
 
 /// One row of `sessions list` output.
+// Only the Unix-only admin socket consumes this, so it is unreachable (but
+// still legitimate API) on Windows.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub struct SessionInfo {
     pub id: Uuid,
     pub shell: String,
@@ -232,8 +241,14 @@ impl SessionManager {
         if sessions.len() >= self.inner.max_sessions {
             return Err(AttachError::TooManySessions);
         }
-        let (pty, events) = pty::spawn(&args.program, args.cwd.as_deref(), args.cols, args.rows)
-            .map_err(|err| AttachError::SpawnFailed(err.to_string()))?;
+        let (pty, events) = pty::spawn(
+            &args.program,
+            &args.args,
+            args.cwd.as_deref(),
+            args.cols,
+            args.rows,
+        )
+        .map_err(|err| AttachError::SpawnFailed(err.to_string()))?;
         let now = now_unix();
         let session = Arc::new(Session {
             id: Uuid::new_v4(),
@@ -256,6 +271,8 @@ impl SessionManager {
 
     /// Kills a session's child by id. Returns false for an unknown id.
     /// The exit pump handles EXIT delivery and removal.
+    // Called only from the Unix-only admin socket; unreachable on Windows.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub fn kill(&self, id: Uuid) -> bool {
         let session = self.inner.sessions.read().unwrap().get(&id).cloned();
         match session {
@@ -268,6 +285,8 @@ impl SessionManager {
     }
 
     /// Snapshot of all live sessions.
+    // Called only from the Unix-only admin socket; unreachable on Windows.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub fn list(&self) -> Vec<SessionInfo> {
         self.inner
             .sessions

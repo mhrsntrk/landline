@@ -31,12 +31,28 @@ ATTACH payload:
 {
   "proto_version": 1,
   "session_id": "uuid, omit to create a new session",
-  "cmd": "optional program, default = configured shell",
+  "cmd": "optional startup command, see below",
   "cwd": "optional working directory",
   "cols": 80,
   "rows": 24
 }
 ```
+
+What runs in the PTY is resolved highest priority first: `cmd` from this payload, then
+the daemon's `default_cmd` config key, then the shell. A blank value counts as absent at
+each step.
+
+A command from either source is not executed directly, it is handed to the resolved shell
+in interactive mode: `<shell> -i -c "<cmd>"` on Unix. Interactive mode is what sources the
+rc files, so aliases, shell functions, and rc-file `PATH` entries resolve exactly as they
+do in a terminal (`"cmd": "tmuxon"` works when `tmuxon` is a shell alias; without `-i` it
+would fail with "command not found"). On Windows, PowerShell has no `-i`, so pwsh and
+powershell get `-NoExit -Command "<cmd>"` and cmd.exe gets `/K "<cmd>"`, both of which run
+the command and leave the user at a prompt.
+
+With no command from either source the shell itself is spawned, as a login shell (`-l`) on
+Unix so the session's environment matches a normal terminal login. The `shell` field of
+ATTACHED reports the program that was spawned.
 
 ## Server → client
 

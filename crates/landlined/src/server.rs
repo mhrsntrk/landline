@@ -22,8 +22,13 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::auth::{self, UnlockGate, UnlockOutcome};
-use crate::config::{self, Config};
-use crate::session::{now_unix, AttachArgs, AttachError, Attachment, SessionManager};
+use crate::config::Config;
+use crate::session::{AttachArgs, AttachError, Attachment, SessionManager};
+// The admin socket, and everything only it uses, is Unix-only.
+#[cfg(unix)]
+use crate::config;
+#[cfg(unix)]
+use crate::session::now_unix;
 
 /// The client must send ATTACH within this window (PROTOCOL.md step 1).
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -240,10 +245,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             return;
         }
     };
-    let program = req.cmd.clone().unwrap_or_else(|| state.cfg.resolve_shell());
+    let (program, args) = state.cfg.resolve_command(req.cmd.as_deref());
     let attachment = match state.manager.attach(AttachArgs {
         session_id,
         program,
+        args,
         cwd: req.cwd.clone().map(PathBuf::from),
         cols: req.cols,
         rows: req.rows,
@@ -564,6 +570,7 @@ mod tests {
             listen: "127.0.0.1:0".to_string(),
             allowed_logins: vec![LOGIN.to_string()],
             shell: "/bin/sh".to_string(),
+            default_cmd: String::new(),
             session_ttl_hours: 1,
             scrollback_bytes: 16_384,
             max_sessions: 4,

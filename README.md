@@ -166,6 +166,7 @@ Any key you omit falls back to its default.
 | `listen` | `"127.0.0.1:7777"` | Address the WebSocket server binds. Keep it on loopback. |
 | `allowed_logins` | `[]` | Tailnet logins allowed in. Empty rejects everyone (fail closed). |
 | `shell` | `""` | Shell to spawn. Empty resolves `$SHELL`, else `/bin/sh`; on Windows `pwsh.exe`, then `powershell.exe`, then `cmd.exe`. |
+| `default_cmd` | `""` | Command this machine opens into. Empty means a plain login shell. Runs through the login shell interactively, so aliases and functions from your rc files resolve. The app can override it per host. |
 | `session_ttl_hours` | `24` | How long a detached session survives without an attached client. |
 | `scrollback_bytes` | `262144` | Per-session replay ring size. |
 | `max_sessions` | `8` | Concurrent session cap. |
