@@ -131,6 +131,14 @@ final class Connection {
     }
 
     func send(_ frame: ClientFrame) {
+        // Guard against frames fired before the handshake or after teardown;
+        // a nil transport would silently drop them otherwise.
+        switch state {
+        case .idle, .closed:
+            return
+        case .connecting, .attaching, .needsUnlock, .live:
+            break
+        }
         transport?.send(frame.encode()) { [weak self] error in
             if let error {
                 DispatchQueue.main.async { self?.close(reason: error.localizedDescription) }

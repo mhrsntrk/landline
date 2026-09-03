@@ -1,3 +1,8 @@
+// The harness feature bypasses auth for local dev; refuse to build it optimized
+// so it can never ride into a release binary by accident.
+#[cfg(all(feature = "harness", not(debug_assertions)))]
+compile_error!("the `harness` feature is dev-only; build it without --release");
+
 mod auth;
 mod config;
 mod doctor;
