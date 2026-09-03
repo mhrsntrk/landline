@@ -10,7 +10,17 @@
   <true/>
   <key>destination</key>
   <string>export</string>
+  <!-- Manual signing: automatic export needs an Xcode-signed-in account,
+       which a headless run does not have. The profile is created and
+       downloaded with `ascelerate profiles`. -->
   <key>signingStyle</key>
-  <string>automatic</string>
+  <string>manual</string>
+  <key>signingCertificate</key>
+  <string>Apple Distribution</string>
+  <key>provisioningProfiles</key>
+  <dict>
+    <key>com.landlineclient.app</key>
+    <string>Landline App Store</string>
+  </dict>
 </dict>
 </plist>
