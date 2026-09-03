@@ -23,6 +23,12 @@ targets:
     info:
       path: Landline/Info.plist
       properties:
+        # Bind the bundle versions to the build settings. xcodegen otherwise
+        # bakes literals into the generated Info.plist, so bumping
+        # CURRENT_PROJECT_VERSION silently ships the old build number and the
+        # upload is rejected as a duplicate.
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         ITSAppUsesNonExemptEncryption: false
         UIAppFonts:
           - JetBrainsMonoNerdFontMono-Regular.ttf
@@ -46,7 +52,7 @@ targets:
         DEVELOPMENT_TEAM: H5CZC3MTXP
         PRODUCT_BUNDLE_IDENTIFIER: com.landlineclient.app
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        CURRENT_PROJECT_VERSION: "2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SWIFT_VERSION: "5.9"
