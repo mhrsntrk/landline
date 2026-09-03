@@ -1,0 +1,31 @@
+[package]
+name = "landlined"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+landline-proto.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+tokio.workspace = true
+portable-pty = "0.9"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+argon2 = "0.5"
+uuid = { version = "1", features = ["v4", "serde"] }
+directories = "6"
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rpassword = "7"
+rand = "0.8"
+
+[features]
+harness = []
+
+[dev-dependencies]
+tokio-tungstenite = "0.24"
+futures-util = "0.3"

@@ -1,0 +1,5 @@
+/target
+*.xcuserdatad/
+xcuserdata/
+.DS_Store
+/ios/build

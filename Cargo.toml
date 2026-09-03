@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/landline-proto", "crates/landlined", "crates/landline-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/mhrsntrk/landline"
+
+[workspace.dependencies]
+landline-proto = { path = "crates/landline-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+bytes = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "signal"] }
+anyhow = "1"
+tracing = "0.1"
