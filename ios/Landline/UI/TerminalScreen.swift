@@ -118,11 +118,16 @@ struct TerminalScreen: View {
         .background(Theme.panel)
         .overlay(alignment: .bottom) { Hairline() }
         .overlay(alignment: .bottomLeading) {
-            // This screen's one tick scale, marking the terminal below it as
-            // the live region (DESIGN.md: at most one per screen).
+            // This screen's one tick scale, standing on the rule that divides
+            // the header from the terminal, marking the terminal as the live
+            // region (DESIGN.md: at most one per screen).
+            //
+            // Drawn inside the header's own bounds on purpose. Nudging it past
+            // the edge with `.offset` renders nothing: the terminal region is
+            // the next sibling in the VStack, so it paints over anything that
+            // spills across the boundary.
             TickScale(edge: .horizontal)
                 .padding(.leading, Theme.Metric.gutter)
-                .offset(y: Theme.Metric.tick)
         }
     }
 
@@ -223,7 +228,7 @@ struct TerminalScreen: View {
                 HStack(spacing: Theme.Metric.grid * 3) {
                     MicroLabel(stateWord, color: Theme.warn)
                     Text(endpointLabel)
-                        .llValue(Theme.inkDim)
+                        .llValue(Theme.inkMuted)
                         .lineLimit(1)
                         .truncationMode(.head)
                     Spacer(minLength: 0)
@@ -281,7 +286,7 @@ struct TerminalScreen: View {
     private func closedContent(reason: String) -> some View {
         VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
             MicroLabel(closedIsError ? "ERROR" : "CLOSED",
-                       color: closedIsError ? Theme.alert : Theme.inkDim)
+                       color: closedIsError ? Theme.alertText : Theme.inkMuted)
             Text(recoveryText(for: reason))
                 .llProse(Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)
@@ -365,9 +370,18 @@ struct TerminalScreen: View {
         switch newState {
         case .live(let resp):
             attached = resp
-            cols = resp.cols
-            rows = resp.rows
             store.setLastSessionID(resp.sessionID, forHostID: host.id)
+            // ATTACHED echoes the geometry we asked for, which is the placeholder
+            // sent before SwiftTerm had a frame to measure. The laid-out grid is
+            // the truth about what the user is looking at, so re-assert it and
+            // let the daemon resize the PTY to match.
+            let laidOut = (cols: controller.cols, rows: controller.rows)
+            if laidOut.cols != resp.cols || laidOut.rows != resp.rows {
+                connection.send(.resize(cols: UInt16(clamping: laidOut.cols),
+                                        rows: UInt16(clamping: laidOut.rows)))
+            }
+            cols = laidOut.cols
+            rows = laidOut.rows
             // The one authored moment (DESIGN.md): the marks draw themselves in
             // as the session attaches, 200ms ease-out, and then nothing on this
             // screen animates again.
@@ -463,6 +477,7 @@ struct TerminalScreen: View {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(1))
             print(controller.metricsLine(label: host.displayName))
+            fflush(stdout)
         }
     }
 }
@@ -474,7 +489,7 @@ struct TerminalScreen: View {
 private struct BackCellStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(configuration.isPressed ? Theme.inkBright : Theme.inkDim)
+            .foregroundStyle(configuration.isPressed ? Theme.inkBright : Theme.inkMuted)
             .background(configuration.isPressed ? Theme.raised : Color.clear)
             .overlay(alignment: .trailing) { VerticalHairline() }
             .animation(Theme.Motion.state, value: configuration.isPressed)
@@ -495,7 +510,7 @@ private struct SessionAgeReadout: View {
                 Text(Self.label(since: createdAt, now: context.date)).llValue()
             }
         } else {
-            Text("--:--:--").llValue(Theme.inkDim)
+            Text("--:--:--").llValue(Theme.inkMuted)
         }
     }
 

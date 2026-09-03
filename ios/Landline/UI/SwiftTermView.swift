@@ -179,15 +179,27 @@ final class TerminalController {
     private var pendingHead = 0
     private var link: CADisplayLink?
 
-    /// How long one drain may hold the main thread. A frame is 16.6ms at 60Hz
-    /// and 8.3ms at 120Hz; staying under half a 120Hz frame keeps the UI (and
-    /// the keyboard) responsive while `cat`ing something enormous. Whatever is
-    /// left over rides the next tick.
+    /// How long one drain may hold the main thread. A frame is 16.6ms at 60Hz;
+    /// a quarter of one keeps the UI and the keyboard responsive while `cat`ing
+    /// something enormous. Whatever is left over rides the next tick.
     private static let frameBudgetSeconds: Double = 0.004
-    /// Granularity of one bounded slice inside that budget.
-    private static let sliceBytes = 64 * 1024
+    /// Doubled while the backlog is large: nobody reads the middle of a 4 MiB
+    /// `cat`, they want the end, so falling further behind is worse than one
+    /// slightly longer frame. Still under a single 60Hz frame.
+    private static let catchUpBudgetSeconds: Double = 0.008
+    private static let catchUpThreshold = 1 << 20
+    /// Bounds on one slice. The slice itself is sized from the measured parse
+    /// rate so the budget is actually honoured; a fixed slice cannot honour it,
+    /// because how long 64 KiB takes depends on the build, the device, and what
+    /// the bytes are.
+    private static let minSliceBytes = 2 * 1024
+    private static let maxSliceBytes = 256 * 1024
     /// Compact the buffer once the consumed prefix passes this.
     private static let compactThreshold = 512 * 1024
+
+    /// Measured SwiftTerm parse throughput, exponentially smoothed. Seeded low
+    /// so the very first frame after attach cannot overshoot.
+    private var bytesPerSecond: Double = 1_000_000
 
     // MARK: Attachment
 
@@ -290,7 +302,10 @@ final class TerminalController {
     }
 
     @objc private func tick() {
-        drain(budget: Self.frameBudgetSeconds)
+        let backlog = pending.count - pendingHead
+        drain(budget: backlog >= Self.catchUpThreshold
+              ? Self.catchUpBudgetSeconds
+              : Self.frameBudgetSeconds)
         if pendingHead >= pending.count {
             link?.isPaused = true
         }
@@ -303,12 +318,26 @@ final class TerminalController {
         var fedThisPass = false
 
         while pendingHead < pending.count {
-            let end = min(pendingHead + Self.sliceBytes, pending.count)
+            let remaining = budget - (CACurrentMediaTime() - started)
+            if fedThisPass && remaining <= 0 { break }
+            // Size the next slice to what the measured parse rate can finish in
+            // the time left, so the loop stops before the budget instead of
+            // after it. `budget` is infinite on an explicit flush.
+            let window = min(max(remaining, 0.0005), 1.0)
+            let allowance = min(Self.maxSliceBytes,
+                                max(Self.minSliceBytes, Int(window * bytesPerSecond)))
+            let end = min(pendingHead + allowance, pending.count)
+
+            let sliceStart = CACurrentMediaTime()
             // ArraySlice: no copy, and SwiftTerm's parser reads it in place.
             view.feed(byteArray: pending[pendingHead..<end])
+            let sliceSeconds = max(CACurrentMediaTime() - sliceStart, 1e-6)
+            // Smoothed, so one unusually escape-heavy slice does not whipsaw
+            // the next frame's allowance.
+            bytesPerSecond = bytesPerSecond * 0.75 + (Double(end - pendingHead) / sliceSeconds) * 0.25
+
             pendingHead = end
             fedThisPass = true
-            if CACurrentMediaTime() - started >= budget { break }
         }
 
         if pendingHead >= pending.count {
@@ -337,7 +366,11 @@ final class TerminalController {
         view.installColors(palette.ansi)
         view.nativeBackgroundColor = palette.background
         view.nativeForegroundColor = palette.foreground
-        view.backgroundColor = palette.background
+        // SwiftTerm draws glyph cells over a transparent backdrop and lets the
+        // layer colour show through the gaps (see its `setupOptions`), so the
+        // ground has to be set on the layer. Setting `backgroundColor` instead
+        // leaves strips of uninitialised backing store visible while scrolling.
+        view.layer.backgroundColor = palette.background.cgColor
         view.caretColor = palette.cursor
         view.caretTextColor = palette.cursorText
         view.selectedTextBackgroundColor = palette.selection
@@ -402,9 +435,10 @@ struct SwiftTermView: UIViewRepresentable {
 
         let view = TerminalView(frame: .zero, font: nil, options: options)
         view.terminalDelegate = context.coordinator
-        // The chrome behind the grid, so an incomplete last row does not flash
-        // a different colour than the terminal ground.
-        view.isOpaque = true
+        // SwiftTerm ships its own grey, rounded, iOS-styled key strip as the
+        // input accessory. This app draws that keypad itself, in world; two of
+        // them stacked is both a duplicate and a DESIGN.md violation.
+        view.inputAccessoryView = nil
         // No iOS text affordances on a PTY.
         view.autocorrectionType = .no
         view.autocapitalizationType = .none

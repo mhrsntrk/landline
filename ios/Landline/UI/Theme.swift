@@ -25,7 +25,15 @@ enum Theme {
     static let ink = Color(hexRGB: 0xABB2BF)
     /// `#D7DAE0` emphasis, active values.
     static let inkBright = Color(hexRGB: 0xD7DAE0)
-    /// `#5C6370` micro-caps labels, inactive, annotation.
+    /// `#949CAB` micro-caps labels, secondary metadata, annotation.
+    ///
+    /// 5.07:1 on `ground`, 5.57:1 on `panel`, 4.72:1 on `raised`. This is the
+    /// quietest ink in the system that is still allowed to carry a glyph.
+    static let inkMuted = Color(hexRGB: 0x949CAB)
+    /// `#5C6370` **non-text only**: disabled chrome and inactive marks.
+    ///
+    /// 2.32:1 on `ground`. An instrument is read in bad light and at arm's
+    /// length, so nothing a user has to read may ever be set in this.
     static let inkDim = Color(hexRGB: 0x5C6370)
     /// `#61AFEF` selection, primary action, focus ring. The only accent.
     static let accent = Color(hexRGB: 0x61AFEF)
@@ -35,8 +43,13 @@ enum Theme {
     static let ok = Color(hexRGB: 0x98C379)
     /// `#E5C07B` reconnecting, degraded.
     static let warn = Color(hexRGB: 0xE5C07B)
-    /// `#E06C75` error, offline, destructive.
+    /// `#E06C75` error and destructive *marks*: status squares, rules, strokes.
+    ///
+    /// 4.38:1 on `ground` and so below the body floor: it may be a mark, but it
+    /// may not be a sentence. Error text uses `alertText`.
     static let alert = Color(hexRGB: 0xE06C75)
+    /// `#EC9098` error text. 6.01:1 on `ground`, 6.60:1 on `panel`.
+    static let alertText = Color(hexRGB: 0xEC9098)
 
     // MARK: Terminal palette (One Dark Pro, exact)
 
@@ -148,9 +161,9 @@ extension Font {
 }
 
 extension View {
-    /// 10pt mono medium, tracked, `inkDim` by default. Pair with `.uppercased()`
-    /// on the string, or use `MicroLabel`, which does it for you.
-    func llMicroLabel(_ color: Color = Theme.inkDim) -> some View {
+    /// 10pt mono medium, tracked, `inkMuted` by default. Pair with
+    /// `.uppercased()` on the string, or use `MicroLabel`, which does it for you.
+    func llMicroLabel(_ color: Color = Theme.inkMuted) -> some View {
         font(.llMicroLabel).tracking(0.8).foregroundStyle(color)
     }
 
@@ -369,7 +382,7 @@ struct MicroLabel: View {
     private let text: String
     private var color: Color
 
-    init(_ text: String, color: Color = Theme.inkDim) {
+    init(_ text: String, color: Color = Theme.inkMuted) {
         self.text = text
         self.color = color
     }
@@ -384,7 +397,9 @@ struct MicroLabel: View {
 //
 // DESIGN.md: every interactive element ships default, pressed, disabled, and
 // focus. `raised` is the pressed layer, `accent` is the focus ring, and
-// disabled drops to `inkDim`. No shadows, no scaling, no bounce.
+// disabled drops to `inkDim`, which is the one place that token is allowed near
+// a glyph: an inactive control is exempt from the contrast floor, and reading as
+// switched off is the whole job. No shadows, no scaling, no bounce.
 
 /// A full-bleed row that presses into the `raised` layer.
 struct InstrumentRowButtonStyle: ButtonStyle {
@@ -437,7 +452,8 @@ struct InstrumentButtonStyle: ButtonStyle {
             switch emphasis {
             case .primary: return Theme.accent
             case .secondary: return Theme.ink
-            case .destructive: return Theme.alert
+            // A button label is text, so the destructive tint is `alertText`.
+            case .destructive: return Theme.alertText
             }
         }
 
@@ -477,15 +493,17 @@ struct InstrumentToggle: View {
                 MicroLabel(title)
                 Spacer(minLength: Theme.Metric.grid * 2)
                 HStack(spacing: 0) {
-                    cell("OFF", active: !isOn)
-                    cell("ON", active: isOn)
+                    cell("OFF", active: !isOn, isPositive: false)
+                    cell("ON", active: isOn, isPositive: true)
                 }
                 .fixedSize()
             }
             .frame(minHeight: Theme.Metric.hitTarget)
             if let note {
+                // A sentence, so it sets in `ink` like every other sentence.
+                // Its rank comes from position and face, never from dimming it.
                 proseText(note)
-                    .llProse(Theme.inkDim)
+                    .llProse()
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -499,11 +517,15 @@ struct InstrumentToggle: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    private func cell(_ text: String, active: Bool) -> some View {
+    /// The selected cell is marked, but only the ON side gets the accent:
+    /// accent means "this setting is doing something", and a blue block on OFF
+    /// reads as enabled at a glance. The unselected cell is still a live target
+    /// and still has to be read, so it drops to `inkMuted`, not to `inkDim`.
+    private func cell(_ text: String, active: Bool, isPositive: Bool) -> some View {
         Text(text)
-            .llMicroLabel(active ? Theme.ground : Theme.inkDim)
+            .llMicroLabel(active ? (isPositive ? Theme.ground : Theme.inkBright) : Theme.inkMuted)
             .frame(width: 40, height: 26)
-            .background(active ? Theme.accent : Color.clear)
+            .background(active ? (isPositive ? Theme.accent : Theme.raised) : Color.clear)
             .overlay {
                 Rectangle().strokeBorder(Theme.rule, lineWidth: 0.5)
             }
@@ -527,7 +549,7 @@ struct FieldRow<Content: View>: View {
                 MicroLabel(label)
                 Spacer(minLength: 0)
                 if let annotation {
-                    MicroLabel(annotation, color: Theme.inkDim)
+                    MicroLabel(annotation)
                 }
             }
             content
@@ -536,11 +558,15 @@ struct FieldRow<Content: View>: View {
                 .tint(Theme.accent)
                 .frame(minHeight: 28)
             if let error {
+                // `alert` is 4.38:1 and so is a mark, not a message. Both the
+                // ERR annotation and the sentence are text, so both take
+                // `alertText` at 6.60:1 on `panel`; it still reads as the same
+                // red at a glance.
                 HStack(alignment: .top, spacing: Theme.Metric.grid * 2) {
-                    MicroLabel("ERR", color: Theme.alert)
+                    MicroLabel("ERR", color: Theme.alertText)
                         .padding(.top, 1)
                     proseText(error)
-                        .llProse(Theme.alert)
+                        .llProse(Theme.alertText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .transition(.opacity)

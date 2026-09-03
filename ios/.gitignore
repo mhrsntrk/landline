@@ -2,3 +2,6 @@
 Landline.xcodeproj/
 Landline/Info.plist
 xcuserdata/
+
+build/
+*.xcarchive

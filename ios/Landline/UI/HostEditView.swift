@@ -26,6 +26,7 @@ struct HostEditView: View {
     init(host: Host, onSave: @escaping (Host, String?) -> Void) {
         _host = State(initialValue: host)
         _portText = State(initialValue: String(host.port))
+        _showValidation = State(initialValue: DemoSeed.showsValidation)
         self.onSave = onSave
     }
 
@@ -85,7 +86,7 @@ struct HostEditView: View {
                                 .autocorrectionDisabled()
                         }
                         Text("Runs through your login shell interactively, so aliases and functions resolve. Leave it empty to get the machine's own default shell.")
-                            .llProse(Theme.inkDim)
+                            .llProse()
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.bottom, Theme.Metric.grid * 3)
                         Hairline()
@@ -108,7 +109,7 @@ struct HostEditView: View {
                                 .onChange(of: unlockSecret) { secretEdited = true }
                         }
                         Text("Stored in the Keychain on this phone and sent only when the daemon asks for it.")
-                            .llProse(Theme.inkDim)
+                            .llProse()
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.bottom, Theme.Metric.grid * 4)
                     }
@@ -118,6 +119,7 @@ struct HostEditView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Theme.panel)
+            .defaultScrollAnchor(DemoSeed.scrollsToBottom ? .bottom : .top)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: focusedField) { previous, _ in
                 if let previous { withAnimation(Theme.Motion.state) { _ = touched.insert(previous) } }
@@ -183,7 +185,7 @@ struct HostEditView: View {
                                 Text(palette.displayName)
                                     .llValue(host.colorScheme == palette ? Theme.inkBright : Theme.ink)
                                 proseText(palette.summary)
-                                    .llProse(Theme.inkDim)
+                                    .llProse()
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Spacer(minLength: 0)
@@ -236,7 +238,9 @@ struct HostEditView: View {
     }
 
     private func prompt(_ text: String) -> Text {
-        Text(text).foregroundColor(Theme.inkDim)
+        // A placeholder is an example a user reads, so it takes `inkMuted`.
+        // `inkDim` would make the field look filled with nothing legible.
+        Text(text).foregroundColor(Theme.inkMuted)
     }
 
     // MARK: - Validation

@@ -37,8 +37,15 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     settings:
       base:
-        # No team on purpose: simulator builds need no signing.
+        # Signing lives here, never in the Xcode UI: xcodegen regenerates the
+        # project from this file, so anything set in Xcode is silently lost.
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: H5CZC3MTXP
+        PRODUCT_BUNDLE_IDENTIFIER: dev.mhrsntrk.Landline
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SWIFT_VERSION: "5.9"
 
   LandlineTests:

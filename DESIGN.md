@@ -31,12 +31,14 @@ comes from the terminal palette itself, never invented.
 | `rule` | `#3E4451` | hairlines, tick marks, borders |
 | `ink` | `#ABB2BF` | primary text |
 | `inkBright` | `#D7DAE0` | emphasis, active values |
-| `inkDim` | `#5C6370` | micro-caps labels, inactive, annotation |
+| `inkMuted` | `#949CAB` | micro-caps labels, secondary metadata, annotation |
+| `inkDim` | `#5C6370` | **non-text only**: disabled chrome, inactive marks |
 | `accent` | `#61AFEF` | selection, primary action, focus ring |
 | `cursor` | `#528BFF` | terminal cursor |
 | `ok` | `#98C379` | connected, success |
 | `warn` | `#E5C07B` | reconnecting, degraded |
-| `alert` | `#E06C75` | error, offline, destructive |
+| `alert` | `#E06C75` | error and destructive marks, squares, rules |
+| `alertText` | `#EC9098` | error *text*; `alert` measures 4.38:1 and misses the body floor |
 
 ### Terminal ANSI (One Dark Pro, exact)
 Normal: `#282C34` `#E06C75` `#98C379` `#E5C07B` `#61AFEF` `#C678DD` `#56B6C2` `#ABB2BF`
@@ -46,6 +48,15 @@ Foreground `#ABB2BF`, background `#282C34`, cursor `#528BFF`, selection `#3E4451
 Dark is not a category default here. It is forced by the scene: this app is opened in bed, on a
 night train, and beside a sleeping person. A light ground would be hostile.
 
+## Contrast floor, measured not estimated
+
+Body and label text is at least 4.5:1 against whichever of `ground` or `panel` sits behind it.
+Measured against `ground`: `ink` 6.57, `inkBright` 10.00, `inkMuted` 5.07, `accent` 5.92, `ok`
+6.94, `warn` 8.10, `alertText` 6.01. `inkDim` measures **2.32 and therefore never carries text**,
+which is the rule this system got wrong first time round: an instrument is read in bad light and
+at arm's length, so its annotation has to survive that, and a dim label is the first thing to go.
+Prose sets in `ink`, never in a muted token.
+
 ## Type
 One family: **SF Mono** for everything that is data, label, or measurement, which in this app is
 almost everything. **SF Pro Text** only for sentences a human wrote (explanatory copy, error
@@ -53,7 +64,7 @@ recovery text, onboarding). Never SF Pro for a value.
 
 | Role | Face | Size | Tracking | Notes |
 |---|---|---|---|---|
-| `microLabel` | SF Mono Medium | 10 | +0.8pt | uppercase, `inkDim`, annotation grammar |
+| `microLabel` | SF Mono Medium | 10 | +0.8pt | uppercase, `inkMuted`, annotation grammar |
 | `value` | SF Mono Regular | 13 | 0 | tabular figures, always |
 | `valueStrong` | SF Mono Medium | 15 | 0 | host names, primary identifiers |
 | `title` | SF Mono Medium | 20 | -0.2pt | screen titles |

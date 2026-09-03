@@ -17,6 +17,8 @@ struct HostListView: View {
     /// Drives the session-age column so the figures stay honest while the
     /// screen is open. Tabular by construction, so nothing shifts when it ticks.
     @State private var now = Date()
+    /// Where the filled rows stop, so the ruling can carry on from there.
+    @State private var extent = IndexExtent()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -127,6 +129,7 @@ struct HostListView: View {
                     open(host)
                 } label: {
                     HostRow(host: host, level: reachability.level(for: host), now: now)
+                        .background(alignment: .top) { extentReporter }
                 }
                 .buttonStyle(InstrumentRowButtonStyle())
                 .listRowInsets(EdgeInsets())
@@ -155,8 +158,30 @@ struct HostListView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // Order matters: the ruling sits directly behind the list, the ground
+        // behind the ruling. Filled rows paint over their own share of it, so
+        // only the unused slots below the last host are ever visible.
+        .background { IndexRuling(extent: extent) }
         .background(Theme.ground)
         .environment(\.defaultMinListRowHeight, Theme.Metric.rowHeight)
+        .onPreferenceChange(IndexExtentKey.self) { extent = $0 }
+    }
+
+    /// Reports where the drawn rows end, so the blank slots below can pick the
+    /// row rhythm up exactly where it stops.
+    ///
+    /// Screen coordinates, not a named space: List hosts each row in its own
+    /// UIKit cell, and a `.named` space declared on the List does not resolve
+    /// from inside one. It silently falls back to global and the ruling lands a
+    /// header's worth too low, which is exactly the bug this comment prevents.
+    private var extentReporter: some View {
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .global)
+            Color.clear.preference(
+                key: IndexExtentKey.self,
+                value: IndexExtent(bottom: frame.maxY, pitch: frame.height)
+            )
+        }
     }
 
     // MARK: - Actions
@@ -198,6 +223,65 @@ struct HostListView: View {
     }
 }
 
+// MARK: - Ruled empty slots
+//
+// A technical plate does not stop halfway down the sheet, and a ledger does not
+// stop ruling once the entries run out: the blank lines are part of the form.
+// Three hosts used to leave most of the screen as bare ground, which read as an
+// unfinished drawing rather than as an index with room in it. So the row rhythm
+// carries on to the bottom edge in the same 0.5pt `rule`, at the pitch the last
+// filled row actually measured, so the spacing never breaks at the handover.
+//
+// This is deliberately only hairlines: no ticks, no registration marks, no
+// placeholder glyphs. Their scarcity is what makes them read as instrument
+// marking (DESIGN.md), and an empty slot has nothing to annotate.
+
+private struct IndexExtent: Equatable {
+    /// Bottom of the deepest filled row, in screen coordinates.
+    var bottom: CGFloat = 0
+    /// That row's height, which is the rhythm to continue.
+    var pitch: CGFloat = 0
+}
+
+private struct IndexExtentKey: PreferenceKey {
+    static let defaultValue = IndexExtent()
+
+    static func reduce(value: inout IndexExtent, nextValue: () -> IndexExtent) {
+        let next = nextValue()
+        if next.bottom > value.bottom { value = next }
+    }
+}
+
+private struct IndexRuling: View {
+    @Environment(\.displayScale) private var displayScale
+    let extent: IndexExtent
+
+    var body: some View {
+        GeometryReader { proxy in
+            // The rows report in screen coordinates, so convert into this
+            // view's own space before drawing.
+            let start = extent.bottom - proxy.frame(in: .global).minY
+            let pitch = max(extent.pitch, Theme.Metric.rowHeight)
+            Canvas { context, size in
+                // Nothing measured yet, or the hosts already fill the viewport
+                // and the list scrolls: either way there is no unused sheet.
+                guard extent.bottom > 0, start > 0, start < size.height else { return }
+                let weight = 1 / displayScale
+                var y = start + pitch
+                while y < size.height {
+                    context.fill(
+                        Path(CGRect(x: 0, y: y - weight, width: size.width, height: weight)),
+                        with: .color(Theme.rule)
+                    )
+                    y += pitch
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Row
 
 private struct HostRow: View {
@@ -221,7 +305,7 @@ private struct HostRow: View {
                         .llValue(Theme.ink)
                         .frame(width: 52, alignment: .trailing)
                     Text(host.sessionAgeLabel(now: now))
-                        .llValue(Theme.inkDim)
+                        .llValue(Theme.inkMuted)
                         .frame(width: 32, alignment: .trailing)
                 }
                 // The two right-hand columns are a measured scale; letting them
@@ -234,7 +318,7 @@ private struct HostRow: View {
                     // String(port), not "\(port)": SwiftUI's localized
                     // interpolation would group the digits and print 8.443.
                     Text("\(host.hostname):" + String(host.port))
-                        .llValue(Theme.inkDim)
+                        .llValue(Theme.inkMuted)
                         .lineLimit(1)
                         .truncationMode(.head)
                     Spacer(minLength: Theme.Metric.grid * 2)
@@ -268,7 +352,7 @@ private struct HostRow: View {
             if host.requireFaceID {
                 MicroLabel("FACE ID")
             }
-            MicroLabel(host.useTLS ? "TLS" : "PLAIN", color: host.useTLS ? Theme.inkDim : Theme.warn)
+            MicroLabel(host.useTLS ? "TLS" : "PLAIN", color: host.useTLS ? Theme.inkMuted : Theme.warn)
         }
         .llMeasuredColumn()
     }
@@ -319,7 +403,7 @@ private struct EmptyIndexView: View {
                 .padding(.horizontal, -Theme.Metric.gutter)
 
                 proseText("Then add the machine's tailnet name, the `\(Host.tailnetExample)` shape that `tailscale status` prints.")
-                    .llProse(Theme.inkDim)
+                    .llProse()
                     .fixedSize(horizontal: false, vertical: true)
 
                 Button("+ ADD HOST", action: addHost)
@@ -344,7 +428,7 @@ private struct EmptyIndexView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             proseText(note)
-                .llProse(Theme.inkDim)
+                .llProse()
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -429,14 +513,24 @@ enum DemoSeed {
 
     /// Debug screenshot hook: open the edit sheet straight away, since a
     /// screenshot run has no fingers.
-    static var opensEditor: Bool { mode == "edit" }
+    static var opensEditor: Bool { mode == "edit" || mode == "editbottom" || showsValidation }
+
+    /// Debug screenshot hook: land the edit sheet at its bottom, since a
+    /// screenshot run cannot scroll either.
+    static var scrollsToBottom: Bool { mode == "editbottom" }
+
+    /// Debug screenshot hook: seed a host that fails validation and open the
+    /// sheet with the errors already showing, so the error styling can be
+    /// looked at rather than reasoned about.
+    static var showsValidation: Bool { mode == "editerror" }
 
     static func seedIfRequested(into store: HostStore) {
         #if DEBUG
-        guard mode == "hosts" || mode == "edit", store.hosts.isEmpty else { return }
+        guard mode != nil, mode != "empty", store.hosts.isEmpty else { return }
         var one = Host()
         one.name = "studio"
-        one.hostname = "studio.tail4f1a.ts.net"
+        one.hostname = showsValidation ? "https://studio tail4f1a" : "studio.tail4f1a.ts.net"
+        one.port = showsValidation ? 0 : 443
         one.startCommand = "tmuxon"
         one.lastShell = "/bin/zsh"
         one.lastAttachedAt = Date().addingTimeInterval(-14 * 60)
@@ -460,7 +554,7 @@ enum DemoSeed {
     /// pretending a simulator can reach a real tailnet.
     static func scriptedLevels(for hosts: [Host]) -> [UUID: StatusSquare.Level]? {
         #if DEBUG
-        guard mode == "hosts" || mode == "edit" else { return nil }
+        guard mode != nil, mode != "empty" else { return nil }
         let script: [StatusSquare.Level] = [.connected, .connected, .offline]
         var result: [UUID: StatusSquare.Level] = [:]
         for (index, host) in hosts.enumerated() {
