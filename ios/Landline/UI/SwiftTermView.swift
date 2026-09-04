@@ -787,6 +787,36 @@ final class TerminalSwipeScroller: NSObject, UIGestureRecognizerDelegate {
 final class TerminalController {
     /// Bytes the user typed or pasted that should go to the PTY.
     var onSend: ((Data) -> Void)?
+
+    /// Bytes of scrollback replay still to be fed.
+    ///
+    /// Replay is real terminal output being parsed a second time, and some of
+    /// it is *queries* the far end sent the first time round: device
+    /// attributes, XTVERSION, OSC colour, window size. SwiftTerm cannot tell a
+    /// replayed query from a live one, so it answers them all, and those
+    /// answers go up the wire as input. Whatever is at the prompt then types
+    /// them, which is how reopening a session printed
+    /// `65;4;1;2;...c` and `rgb:abab/b2b2/bfbf` into the shell.
+    ///
+    /// So responses generated while replaying are dropped. The count is exact
+    /// (the daemon reports it in ATTACHED) and slices are split on the
+    /// boundary, so a live query arriving in the same frame is still answered.
+    private var replayRemaining = 0
+
+    var isReplaying: Bool { replayRemaining > 0 }
+
+    /// A response SwiftTerm produced while parsing. Dropped while replaying,
+    /// forwarded otherwise. Lives here rather than in the delegate so the rule
+    /// is testable without standing up a view and its delegate chain.
+    func forwardResponse(_ data: Data) {
+        guard !isReplaying else { return }
+        onSend?(data)
+    }
+
+    /// Called when ATTACHED lands, before any replayed STDOUT is fed.
+    func beginReplay(bytes: Int) {
+        replayRemaining = max(0, bytes)
+    }
     /// The terminal grid was re-laid-out to a new size.
     var onResize: ((_ cols: Int, _ rows: Int) -> Void)?
 
@@ -893,6 +923,9 @@ final class TerminalController {
         guard let view = terminalView else { return }
         let started = CACurrentMediaTime()
         view.feed(byteArray: [UInt8](data)[...])
+        if replayRemaining > 0 {
+            replayRemaining = max(0, replayRemaining - data.count)
+        }
         let elapsed = CACurrentMediaTime() - started
         metrics.flushes += 1
         metrics.feedSeconds += elapsed
@@ -917,6 +950,15 @@ final class TerminalController {
             probe.hitches,
             probe.worstIntervalSeconds * 1000
         )
+    }
+
+    /// Feeds everything buffered, right now, ignoring the frame budget.
+    ///
+    /// The normal path waits for a display link, which never ticks in a unit
+    /// test, so the replay tests would otherwise assert against bytes that
+    /// were never parsed.
+    func flushForTest() {
+        drain(budget: .infinity)
     }
 
     func resetMetrics() {
@@ -966,11 +1008,19 @@ final class TerminalController {
             let window = min(max(remaining, 0.0005), 1.0)
             let allowance = min(Self.maxSliceBytes,
                                 max(Self.minSliceBytes, Int(window * bytesPerSecond)))
-            let end = min(pendingHead + allowance, pending.count)
+            var end = min(pendingHead + allowance, pending.count)
+            // Never let one slice straddle the end of the replay: the replayed
+            // half must not answer queries and the live half must.
+            if replayRemaining > 0 {
+                end = min(end, pendingHead + replayRemaining)
+            }
 
             let sliceStart = CACurrentMediaTime()
             // ArraySlice: no copy, and SwiftTerm's parser reads it in place.
             view.feed(byteArray: pending[pendingHead..<end])
+            if replayRemaining > 0 {
+                replayRemaining -= (end - pendingHead)
+            }
             let sliceSeconds = max(CACurrentMediaTime() - sliceStart, 1e-6)
             // Smoothed, so one unusually escape-heavy slice does not whipsaw
             // the next frame's allowance.
@@ -1857,7 +1907,11 @@ struct SwiftTermView: UIViewRepresentable {
         }
 
         func send(source: TerminalView, data: ArraySlice<UInt8>) {
-            controller?.onSend?(Data(data))
+            // A response produced while replaying is an answer to a question
+            // the far end asked minutes ago and has long since stopped
+            // listening for. Sending it types it at whatever prompt is there
+            // now.
+            controller?.forwardResponse(Data(data))
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {

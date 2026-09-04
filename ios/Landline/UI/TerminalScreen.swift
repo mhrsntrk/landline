@@ -489,6 +489,10 @@ struct TerminalScreen: View {
         case .live(let resp):
             attached = resp
             sessionEndedAt = nil
+            // Before a single replayed byte reaches SwiftTerm. The daemon sends
+            // ATTACHED, then the scrollback, then live output, and the replay
+            // must not answer the queries it contains.
+            controller.beginReplay(bytes: resp.replayBytes)
             store.setLastSessionID(resp.sessionID, forHostID: host.id)
             // ATTACHED echoes the geometry we asked for, which is the placeholder
             // sent before SwiftTerm had a frame to measure. The laid-out grid is
