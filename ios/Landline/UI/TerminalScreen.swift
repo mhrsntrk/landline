@@ -49,15 +49,26 @@ struct TerminalScreen: View {
     /// the system picks up a change made while the app was away.
     @State private var systemIsLight = SystemAppearance.isLight
 
+    /// The host as the store currently holds it, not as it looked when this
+    /// screen was pushed.
+    ///
+    /// `host` is a `let` snapshot copied into `openedHost` at tap time, so an
+    /// edit made after that never reaches this view: the terminal kept
+    /// rendering the previous font, which reads as the picker being inverted
+    /// because every change appears one step behind.
+    private var liveHost: Host {
+        store.hosts.first { $0.id == host.id } ?? host
+    }
+
     private var palette: TerminalPalette {
-        TerminalPalette.resolve(scheme: host.colorScheme, systemIsLight: systemIsLight)
+        TerminalPalette.resolve(scheme: liveHost.colorScheme, systemIsLight: systemIsLight)
     }
 
     /// The face this host renders in. Empty is the bundled Nerd Font, and a
     /// family whose configuration profile was removed while the app was away
     /// resolves back to it rather than to some proportional substitute — see
     /// `TerminalFont.font(family:size:bold:)`.
-    private var fontFamily: String { host.fontFamily }
+    private var fontFamily: String { liveHost.fontFamily }
 
     /// Live point size. Held in state rather than read off `host` every time
     /// because the pinch gesture changes it mid-session and writes it back to
@@ -78,6 +89,18 @@ struct TerminalScreen: View {
         .preferredColorScheme(.dark)
         .onAppear { wireUpAndConnect() }
         .onDisappear { connection.disconnect(sendDetach: true) }
+        // A font or palette edit must reach the terminal the moment it is
+        // saved, not on the next foregrounding.
+        .onChange(of: fontFamily) { _, _ in applyFont() }
+        .onChange(of: liveHost.fontSize) { _, newValue in
+            let resolved = TerminalFont.size(forHost: liveHost.fontSize)
+            if fontSize != resolved {
+                fontSize = resolved
+                applyFont()
+            }
+            _ = newValue
+        }
+        .onChange(of: liveHost.colorScheme) { _, _ in controller.apply(palette: palette) }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
@@ -114,7 +137,7 @@ struct TerminalScreen: View {
                 backControl
                 HStack(spacing: Theme.Metric.grid * 2) {
                     StatusSquare(level: statusLevel)
-                    Text(host.displayName)
+                    Text(liveHost.displayName)
                         .llValueStrong()
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -189,6 +212,13 @@ struct TerminalScreen: View {
         if let attached {
             parts.append((attached.shell as NSString).lastPathComponent)
             parts.append("SESSION " + String(attached.sessionID.prefix(8)))
+        }
+        // The face actually in use, read back rather than assumed. This path
+        // has shipped two bugs where the app believed one font was applied and
+        // the screen drew another, neither visible except by reading
+        // letterforms off a photograph.
+        if !controller.resolvedFontFamily.isEmpty {
+            parts.append(controller.resolvedFontFamily.uppercased())
         }
         return parts.joined(separator: " / ")
     }
@@ -324,7 +354,7 @@ struct TerminalScreen: View {
     }
 
     private var endpointLabel: String {
-        "\(host.hostname):\(host.port)"
+        "\(liveHost.hostname):\(liveHost.port)"
     }
 
     /// Turns a transport failure into one sentence. Foundation prefixes URL
@@ -408,7 +438,7 @@ struct TerminalScreen: View {
     // MARK: - Connection plumbing
 
     private func wireUpAndConnect() {
-        fontSize = TerminalFont.size(forHost: (store.host(id: host.id) ?? host).fontSize)
+        fontSize = TerminalFont.size(forHost: liveHost.fontSize)
         applyFont()
         controller.onFontSizeChange = { newSize in
             fontSize = newSize

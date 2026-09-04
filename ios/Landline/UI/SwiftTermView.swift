@@ -401,6 +401,15 @@ final class TerminalController {
 
     /// Resolved appearance in, exactly like `apply(palette:)`: the screen owns
     /// the decision, this owns the UIKit consequences.
+    /// The family the terminal is *actually* drawing in, after every fallback
+    /// in `TerminalFont` has had its say.
+    ///
+    /// Recorded rather than assumed: this font path has now shipped two bugs
+    /// where the app believed one face was in use and the screen showed
+    /// another, and neither was visible without reading letterforms off a
+    /// photograph. Surfaced in the header so the answer is on screen.
+    private(set) var resolvedFontFamily: String = ""
+
     func apply(fontFamily: String, size: CGFloat) {
         // Recorded even with no view attached, so the family survives the gap
         // between a SwiftUI update and `makeUIView`.
@@ -417,6 +426,7 @@ final class TerminalController {
         // lines do not fall back to a proportional face.
         let normal = TerminalFont.font(family: fontFamily, size: size, bold: false)
         let bold = TerminalFont.font(family: fontFamily, size: size, bold: true)
+        resolvedFontFamily = normal.familyName
         view.setFonts(
             normal: normal,
             bold: bold,
