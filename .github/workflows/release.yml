@@ -134,6 +134,10 @@ jobs:
   release:
     needs: [build-macos, build-linux, build-windows]
     runs-on: ubuntu-latest
+    # The default GITHUB_TOKEN is read-only, so creating the release 403s
+    # with "Resource not accessible by integration". Only this job needs it.
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
