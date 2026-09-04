@@ -161,6 +161,40 @@ struct Host: Codable, Identifiable, Hashable {
     /// Wall clock at the last ATTACHED response, used for the session age column.
     var lastAttachedAt: Date?
 
+    /// Debug screenshot hook, the same idiom as `DemoSeed`: where a demo seed
+    /// actually dials, whatever endpoint it *prints*.
+    ///
+    /// A store frame of the iPad has to show a tailnet name, because the header
+    /// band prints `ENDPOINT` and the index row prints `hostname:port`, and a
+    /// listing for a Tailscale client that advertises `127.0.0.1:7788` is
+    /// telling the reader the wrong thing about the product. The session behind
+    /// it still has to be real, and the only daemon a simulator can reach is
+    /// the harness one on this machine. So `LANDLINE_DEMO_ENDPOINT=host:port`
+    /// redirects every connection there, in plain ws, while the model keeps the
+    /// name it displays. Compiled out of release, and inert without the
+    /// variable, so a real install can never be redirected anywhere.
+    ///
+    /// The variable names the host it applies to
+    /// (`LANDLINE_DEMO_ENDPOINT=studio.tail4f1a.ts.net@127.0.0.1:7788`) rather
+    /// than redirecting everything, because the index probes every row for
+    /// reachability and a blanket redirect would draw a filled status square on
+    /// machines that do not exist.
+    private var demoEndpoint: (host: String, port: Int)? {
+        #if DEBUG
+        guard let value = ProcessInfo.processInfo.environment["LANDLINE_DEMO_ENDPOINT"],
+              let at = value.firstIndex(of: "@"),
+              String(value[value.startIndex..<at]) == hostname
+        else { return nil }
+        let endpoint = value[value.index(after: at)...]
+        guard let colon = endpoint.lastIndex(of: ":"),
+              let port = Int(endpoint[endpoint.index(after: colon)...])
+        else { return nil }
+        return (String(endpoint[endpoint.startIndex..<colon]), port)
+        #else
+        return nil
+        #endif
+    }
+
     /// The daemon's single WebSocket endpoint (PROTOCOL.md: `GET /v1/shell`).
     var wsURL: URL {
         var components = URLComponents()
@@ -168,6 +202,11 @@ struct Host: Codable, Identifiable, Hashable {
         components.host = hostname
         components.port = Int(port)
         components.path = "/v1/shell"
+        if let demo = demoEndpoint {
+            components.scheme = "ws"
+            components.host = demo.host
+            components.port = demo.port
+        }
         // A malformed hostname can make URL construction fail; fall back to a
         // guaranteed-parseable placeholder so callers do not have to unwrap.
         return components.url ?? URL(string: "wss://invalid.invalid/v1/shell")!
@@ -180,6 +219,11 @@ struct Host: Codable, Identifiable, Hashable {
         components.host = hostname
         components.port = Int(port)
         components.path = "/v1/shell"
+        if let demo = demoEndpoint {
+            components.scheme = "http"
+            components.host = demo.host
+            components.port = demo.port
+        }
         return components.url ?? URL(string: "https://invalid.invalid/v1/shell")!
     }
 

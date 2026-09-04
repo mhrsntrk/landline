@@ -1,0 +1,72 @@
+{
+  "iphone": [
+    {
+      "file": "01_session.png",
+      "label": "01 / SESSION",
+      "en-US": "A real shell on a machine you own.",
+      "ko": "내가 소유한 컴퓨터의 진짜 셸."
+    },
+    {
+      "file": "02_index.png",
+      "label": "02 / MACHINES",
+      "en-US": "Every machine on your tailnet, and whether it answers.",
+      "ko": "내 tailnet의 컴퓨터와 응답 여부를 한눈에."
+    },
+    {
+      "file": "03_tmux.png",
+      "label": "03 / TMUX",
+      "en-US": "Your tmux leader is one key. Windows are one tap.",
+      "ko": "tmux 리더 키는 버튼 하나, 창 전환은 탭 한 번."
+    },
+    {
+      "file": "04_palettes.png",
+      "label": "04 / PALETTES",
+      "en-US": "Nine schemes, taken from the projects that publish them.",
+      "ko": "각 프로젝트가 공개한 값 그대로 옮긴 9가지 색 구성."
+    },
+    {
+      "file": "05_keybar.png",
+      "label": "05 / KEY BAR",
+      "en-US": "Build the key row you want, down to the bytes it sends.",
+      "ko": "키 바를 직접 구성하고, 보낼 바이트까지 지정."
+    },
+    {
+      "file": "06_host.png",
+      "label": "06 / SETUP",
+      "en-US": "A machine is a hostname, a port, and what to run.",
+      "ko": "컴퓨터 등록에 필요한 것은 호스트 이름과 포트뿐."
+    }
+  ],
+  "ipad": [
+    {
+      "file": "01_split.png",
+      "label": "01 / IPAD",
+      "en-US": "On iPad your machines sit beside the session.",
+      "ko": "iPad에서는 컴퓨터 목록이 셸 옆에 나란히."
+    },
+    {
+      "file": "02_fullwidth.png",
+      "label": "02 / FULL WIDTH",
+      "en-US": "Give the shell the whole screen when you need it.",
+      "ko": "필요하면 셸에 화면 전체를 내줍니다."
+    },
+    {
+      "file": "03_tmux.png",
+      "label": "03 / TMUX",
+      "en-US": "Your tmux leader is one key. Windows are one tap.",
+      "ko": "tmux 리더 키는 버튼 하나, 창 전환은 탭 한 번."
+    },
+    {
+      "file": "04_palettes.png",
+      "label": "04 / PALETTES",
+      "en-US": "Nine schemes, taken from the projects that publish them.",
+      "ko": "각 프로젝트가 공개한 값 그대로 옮긴 9가지 색 구성."
+    },
+    {
+      "file": "05_keybar.png",
+      "label": "05 / KEY BAR",
+      "en-US": "Build the key row you want, down to the bytes it sends.",
+      "ko": "키 바를 직접 구성하고, 보낼 바이트까지 지정."
+    }
+  ]
+}

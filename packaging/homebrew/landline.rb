@@ -8,11 +8,21 @@
 #   __SHA_X86__   sha256 of landlined-x86_64-apple-darwin
 #   __SHA_LINUX_ARM__  sha256 of landlined-aarch64-unknown-linux-gnu
 #   __SHA_LINUX_X86__  sha256 of landlined-x86_64-unknown-linux-gnu
+#   __BOTTLE_BLOCK__   the `bottle do ... end` produced by `brew bottle`
+#
+# The bottle block is not decoration. Without a bottle Homebrew treats this as
+# a source build, even though `install` only copies an already-compiled binary,
+# and it then refuses to proceed on any machine whose Command Line Tools are
+# out of date. A bottle installs with no developer tools at all, and unlike a
+# cask it carries no Gatekeeper quarantine, which matters while these binaries
+# are still unsigned.
 class Landline < Formula
   desc "Terminal on your iPhone, over your own tailnet"
   homepage "https://github.com/mhrsntrk/landline"
   version "__VERSION__"
   license "MIT"
+
+__BOTTLE_BLOCK__
 
   on_macos do
     on_arm do

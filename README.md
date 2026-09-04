@@ -64,6 +64,10 @@ curl -fsSL https://raw.githubusercontent.com/mhrsntrk/landline/main/packaging/in
 Linux binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer. Anything older builds
 from source with `cargo build --release -p landlined`.
 
+macOS installs pour a Homebrew bottle, so no Xcode Command Line Tools are needed. If Homebrew
+ever reports that yours are too outdated, it means no bottle matched your macOS version and
+architecture; `install.sh` above works regardless.
+
 Then, on every host:
 
 ```sh

@@ -1,0 +1,25 @@
+export PATH="$HOME/bin":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+export TMUX_TMPDIR=/tmp/landline-shots/tmux
+export EDITOR=nvim
+export LANG=en_US.UTF-8
+export CLICOLOR=1
+RUSTV=$(rustc --version 2>/dev/null | cut -d' ' -f2)
+setopt PROMPT_SUBST
+autoload -Uz colors && colors
+HISTFILE=$HOME/.zsh_history
+SAVEHIST=1000
+HISTSIZE=1000
+
+_ll_git() {
+  local b dirty
+  b=$(command git symbolic-ref --short HEAD 2>/dev/null) || return
+  print -n " %F{244}on%f %F{magenta} ${b}%f"
+  if ! command git diff --quiet 2>/dev/null; then dirty="!"; fi
+  if [[ -n $(command git ls-files --others --exclude-standard 2>/dev/null | head -1) ]]; then dirty="${dirty}?"; fi
+  [[ -n $dirty ]] && print -n " %F{red}[${dirty}]%f"
+}
+_ll_rust() { [[ -f Cargo.toml ]] && print -n " %F{244}via%f %F{red} v${RUSTV}%f" }
+PROMPT='%F{cyan}%B%~%b%f$(_ll_git)$(_ll_rust)
+%F{green}❯%f '
+RPROMPT=''
+mkdir -p "$TMUX_TMPDIR"

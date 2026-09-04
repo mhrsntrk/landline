@@ -716,7 +716,7 @@ enum DemoSeed {
     /// 7777: that is where a real daemon listens, and a screenshot run has no
     /// business connecting to it.
     static var seedsLiveHost: Bool {
-        mode == "live" || mode == "liveresize" || switchesHosts
+        mode == "live" || mode == "liveresize" || mode == "liveleader" || switchesHosts
     }
 
     /// Debug hook: attach, point the detail pane at a different machine, then
@@ -731,7 +731,10 @@ enum DemoSeed {
     static var opensTerminal: Bool {
         mode == "terminal" || armsLeader || togglesIndex || seedsLiveHost
     }
-    static var armsLeader: Bool { mode == "leaderarmed" }
+    /// `liveleader` is `live` with the leader latch already down, so a still can
+    /// hold the armed key bar over a session that is genuinely attached rather
+    /// than over a CLOSED band.
+    static var armsLeader: Bool { mode == "leaderarmed" || mode == "liveleader" }
     static var opensSettings: Bool { mode == "settings" || opensKeyBar }
     static var opensKeyBar: Bool { mode == "keybar" || opensCustomKey || opensCatalog }
     static var opensCatalog: Bool { mode == "catalog" }
@@ -748,18 +751,58 @@ enum DemoSeed {
         }
     }
 
+    /// Debug screenshot hook: the machines a store frame of the index needs and
+    /// a layout check does not. Three rows leave two thirds of a phone screen
+    /// empty, which reads as an app with nothing in it rather than as an index,
+    /// so `index` and `fullindex` seed a plausible tailnet on top of the three
+    /// every other mode gets. Empty for every other mode, so no existing run
+    /// changes shape.
+    private static var extraHosts: [Host] {
+        #if DEBUG
+        guard mode == "index" || mode == "fullindex" else { return [] }
+        let more: [(String, String, UInt16, String, TimeInterval)] = [
+            ("edge", "edge.tail4f1a.ts.net", 443, "/bin/bash", -4 * 3600),
+            ("nas", "nas.tail4f1a.ts.net", 443, "/bin/zsh", -3 * 86_400),
+            ("builder", "builder.tail4f1a.ts.net", 443, "/bin/zsh", -5 * 3600),
+            ("pi", "pi.tail4f1a.ts.net", 443, "/bin/bash", -6 * 86_400),
+            ("vps", "vps.tail4f1a.ts.net", 8443, "/usr/bin/fish", -9 * 3600),
+        ]
+        return more.map { name, hostname, port, shell, age in
+            var host = Host()
+            host.name = name
+            host.hostname = hostname
+            host.port = port
+            host.lastShell = shell
+            host.lastAttachedAt = Date().addingTimeInterval(age)
+            return host
+        }
+        #else
+        return []
+        #endif
+    }
+
     static func seedIfRequested(into store: HostStore) {
         #if DEBUG
         guard mode != nil, mode != "empty", store.hosts.isEmpty else { return }
         var one = Host()
-        one.name = seedsLiveHost ? "harness" : "studio"
-        one.hostname = showsValidation ? "https://studio tail4f1a"
-            : (seedsLiveHost ? "127.0.0.1" : "studio.tail4f1a.ts.net")
-        one.port = showsValidation ? 0 : (seedsLiveHost ? 7788 : 443)
-        one.useTLS = !seedsLiveHost
+        // One name in both shapes: a store screenshot of a live session prints
+        // this in the header band, and "harness" reads as scaffolding there.
+        one.name = "studio"
+        // A live seed keeps the tailnet name and port it prints; where it
+        // actually dials is `LANDLINE_DEMO_ENDPOINT` (see `Host.demoEndpoint`),
+        // because the iPad header band prints `ENDPOINT` and a store frame of a
+        // Tailscale client may not advertise a loopback address.
+        one.hostname = showsValidation ? "https://studio tail4f1a" : "studio.tail4f1a.ts.net"
+        one.port = showsValidation ? 0 : 443
+        one.useTLS = !showsValidation
         // A live run starts tmux for real, because tmux redrawing itself is the
         // half of the resize path that lives on the far end.
-        one.startCommand = seedsLiveHost ? "tmux new -A -s landline" : "tmux new -A -s main"
+        // The index frames drop it: the row prints the whole command as a flag,
+        // and at phone width that pushes the endpoint into a head-truncated
+        // stub, which is two ellipses on one line and reads as a broken layout
+        // rather than as a machine.
+        one.startCommand = seedsLiveHost ? "tmux new -A -s landline"
+            : (extraHosts.isEmpty ? "tmux new -A -s main" : "")
         one.leaderKey = "C-a"
         one.lastShell = "/bin/zsh"
         one.lastAttachedAt = Date().addingTimeInterval(-14 * 60)
@@ -776,6 +819,7 @@ enum DemoSeed {
         three.lastShell = "/usr/bin/fish"
         three.lastAttachedAt = Date().addingTimeInterval(-2 * 86_400)
         for host in [one, two, three] { store.add(host) }
+        for host in extraHosts { store.add(host) }
         #endif
     }
 

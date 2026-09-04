@@ -202,3 +202,84 @@ jobs:
           git add Formula/landline.rb
           git diff --quiet --cached || git commit -m "landline $version"
           git push
+
+  # Homebrew treats a formula with no bottle as a source build, even though our
+  # install only copies an already-compiled binary, and then refuses to run on
+  # any machine whose Command Line Tools are out of date. A real user hit
+  # exactly that. A bottle installs with no developer tools, and unlike a cask
+  # it carries no Gatekeeper quarantine, which matters while these binaries are
+  # unsigned.
+  #
+  # Homebrew falls back to an older OS tag of the same architecture, so
+  # bottling the OLDEST runner we support gives the widest coverage. Newer
+  # macOS uses an older bottle; the reverse is not true.
+  bottle:
+    needs: homebrew
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14      # arm64, Sonoma: covers Sonoma and newer
+          - runner: macos-13      # x86_64, Ventura: covers Ventura and newer
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Build the bottle
+        run: |
+          set -eu
+          brew tap mhrsntrk/tap
+          brew install --build-bottle mhrsntrk/tap/landline
+          brew bottle --json --no-rebuild \
+            --root-url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}" \
+            mhrsntrk/tap/landline
+          # `brew bottle` writes name--version.tag; the published file drops one
+          # dash, and brew looks for the single-dash name at root_url.
+          for f in landline--*.bottle.tar.gz; do
+            mv "$f" "$(echo "$f" | sed 's/--/-/')"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bottle-${{ matrix.runner }}
+          path: |
+            landline-*.bottle.tar.gz
+            landline--*.bottle.json
+          if-no-files-found: error
+
+  # Attaches the bottles to the release and merges their checksums into the
+  # formula, so the tap and the release agree in one step rather than by hand.
+  bottle-publish:
+    needs: bottle
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bottle-*
+          path: bottles
+          merge-multiple: true
+
+      - name: Attach the bottles to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            bottles/landline-*.bottle.tar.gz --clobber
+
+      - name: Merge the checksums into the formula
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/mhrsntrk/homebrew-tap.git" tap
+          brew tap-new --no-git mhrsntrk/local 2>/dev/null || true
+          cp tap/Formula/landline.rb "$(brew --repository)/Library/Taps/mhrsntrk/homebrew-local/Formula/" 2>/dev/null || true
+          # `--merge --write` folds every runner's json into one bottle block.
+          brew bottle --merge --write --no-commit bottles/landline--*.bottle.json
+          cp "$(brew --repository)/Library/Taps/mhrsntrk/homebrew-local/Formula/landline.rb" tap/Formula/landline.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/landline.rb
+          git diff --quiet --cached || git commit -m "landline $version: bottles"
+          git push

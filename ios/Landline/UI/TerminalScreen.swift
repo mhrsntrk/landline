@@ -584,6 +584,20 @@ struct TerminalScreen: View {
             if marksProgress < 1 {
                 withAnimation(Theme.Motion.attach) { marksProgress = 1 }
             }
+            // Debug screenshot hook, the same idiom as `DemoSeed`: arm the
+            // leader a moment *after* the attach settles. Arming in
+            // `wireUpAndConnect` is not enough against a live session, for two
+            // reasons: a foregrounding that lands while the connection is still
+            // idle calls `reconnect()`, which clears every latch, and the
+            // emulator's own answers to the queries tmux asks on attach travel
+            // out through `sendUserInput`, which *consumes* one. Two seconds is
+            // past both. Compiled out of release with the rest of `DemoSeed`.
+            if DemoSeed.armsLeader {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    latches.leader = true
+                }
+            }
 
         case .needsUnlock(let attemptsLeft):
             unlockAttemptsLeft = attemptsLeft
