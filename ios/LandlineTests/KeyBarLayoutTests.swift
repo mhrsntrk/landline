@@ -44,6 +44,55 @@ final class KeyBarLayoutTests: XCTestCase {
         XCTAssertEqual(KeyBarCatalog.entry(id: "leader")?.action, .latchLeader)
     }
 
+    /// DEL is forward delete and BKSP is 0x7F. They are different keys and the
+    /// catalog now offers both; sending the wrong one deletes in the wrong
+    /// direction, which is the sort of thing nobody notices until they are
+    /// halfway through a command.
+    func testBackspaceIsDeleteBackwardsAndNotForwardDelete() {
+        assertSends("backspace", [0x7f])
+        assertSends("delete", [0x1b, 0x5b, 0x33, 0x7e])
+    }
+
+    /// The line editing group: one keystroke instead of forty held backspaces.
+    /// Every byte here is a readline default, so they work unchanged in zsh, in
+    /// bash and at Claude Code's prompt.
+    func testLineEditingGroupSendsTheReadlineControlCodes() {
+        assertSends("ctrl.w", [0x17])
+        assertSends("ctrl.u", [0x15])
+        assertSends("ctrl.k", [0x0b])
+        assertSends("ctrl.a", [0x01])
+        assertSends("ctrl.e", [0x05])
+    }
+
+    /// The group exists as a group, because the picker lists by group and five
+    /// keys scattered through CONTROL CODES would not be found.
+    func testLineEditingIsItsOwnGroup() {
+        guard let group = KeyBarCatalog.groups.first(where: { $0.id == "LINE EDITING" }) else {
+            return XCTFail("no LINE EDITING group in the catalog")
+        }
+        XCTAssertEqual(group.entries.map(\.id),
+                       ["ctrl.w", "ctrl.u", "ctrl.k", "ctrl.a", "ctrl.e"])
+        for entry in group.entries {
+            XCTAssertEqual(entry.label.count, 2, "\(entry.id) label is \(entry.label)")
+            XCTAssertTrue(entry.label.hasPrefix("^"), "\(entry.id) should read as a control code")
+        }
+    }
+
+    /// Each of these is a fold of the same letter, which is the invariant that
+    /// makes the bytes above checkable against `ControlFold` rather than against
+    /// a table someone typed twice.
+    func testLineEditingBytesAgreeWithTheControlFoldTable() {
+        for (id, character) in [("ctrl.w", "w"), ("ctrl.u", "u"), ("ctrl.k", "k"),
+                                ("ctrl.a", "a"), ("ctrl.e", "e")] {
+            guard case .send(let template)? = KeyBarCatalog.entry(id: id)?.action,
+                  let bytes = template.resolve(leaderByte: nil),
+                  let expected = ControlFold.byte(forControlCharacter: Character(character)) else {
+                return XCTFail("\(id) does not send a fixed byte")
+            }
+            XCTAssertEqual(bytes, [expected])
+        }
+    }
+
     /// Every punctuation mark the brief lists, each sending itself.
     func testPunctuationIsComplete() {
         let expected = "~|/-_=+:;'\"`$&*()[]{}<>"

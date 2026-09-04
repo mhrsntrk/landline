@@ -555,9 +555,23 @@ struct TerminalScreen: View {
     /// be tested without a view. One frame per keypress, because the tmux prefix
     /// and the key it prefixes must not be able to arrive split around a
     /// reconnect.
+    ///
+    /// The armed check is not a micro-optimisation, it is the difference between
+    /// a keystroke costing a frame and costing nothing. `latches` is `@State`,
+    /// and `consume` is `mutating`, so calling it writes the State and
+    /// invalidates this whole body — header, key bar and all — once per byte
+    /// typed. On a held key that is 25 to 50 body re-renders a second for a
+    /// state machine that had nothing to say. Cleared latches return the payload
+    /// unchanged (asserted in `LatchStateTests`), so skipping the call when none
+    /// is armed is behaviour-preserving by construction.
     private func sendUserInput(_ data: Data) {
         guard !data.isEmpty else { return }
-        let out = latches.consume(Array(data), leaderByte: leaderByte)
+        let out: [UInt8]
+        if latches.isAnyArmed {
+            out = latches.consume(Array(data), leaderByte: leaderByte)
+        } else {
+            out = Array(data)
+        }
         guard !out.isEmpty else { return }
         connection.send(.stdin(Data(out)))
     }

@@ -49,6 +49,17 @@ struct KeyBarCatalogEntry: Identifiable, Hashable {
     /// The name a person would say, for the row in the picker and for VoiceOver.
     let name: String
     let action: KeyBarAction
+    /// Holding this key repeats it, at the rate `KeyRepeatState` sets.
+    ///
+    /// Off for everything by default, and that is the decision rather than an
+    /// oversight. Repeat is only wanted where the key is a *motion* — one more
+    /// character gone, one more line back — and it is actively dangerous
+    /// everywhere else: a held `^C` is a signal storm, a held `^D` closes the
+    /// shell and then logs the session out, a held tmux leader key opens twenty
+    /// windows, and a held `~` types a line of tildes into a live prompt. So the
+    /// set is backspace, forward delete, the four arrows, and page up and down.
+    /// Custom keys never repeat, because nothing here can know what they do.
+    var repeats: Bool = false
 }
 
 /// Everything the bar can be built from, grouped the way the picker lists it.
@@ -63,13 +74,19 @@ enum KeyBarCatalog {
         Group(id: "KEYS", entries: [
             .init(id: "esc", label: "ESC", name: "escape", action: .send([0x1b])),
             .init(id: "tab", label: "TAB", name: "tab", action: .send([0x09])),
-            // Forward delete, not backspace: the software keyboard already has
-            // backspace, and the key it cannot produce is this one.
-            .init(id: "delete", label: "DEL", name: "forward delete", action: .send([0x1b, 0x5b, 0x33, 0x7e])),
+            // The software keyboard has a backspace of its own, so this one is
+            // not about reaching the byte. It is about the *rate*: every 0x7F is
+            // a round trip to the daemon and the shell echoes the erase back, so
+            // the system key deletes at the speed of the link. This bar owns its
+            // own repeat clock (`KeyRepeatState`), which is the one thing the
+            // system keyboard will not give up.
+            .init(id: "backspace", label: "BKSP", name: "backspace", action: .send([0x7f]), repeats: true),
+            // Forward delete, which the software keyboard cannot produce at all.
+            .init(id: "delete", label: "DEL", name: "forward delete", action: .send([0x1b, 0x5b, 0x33, 0x7e]), repeats: true),
             .init(id: "home", label: "HOME", name: "home", action: .send([0x1b, 0x5b, 0x48])),
             .init(id: "end", label: "END", name: "end", action: .send([0x1b, 0x5b, 0x46])),
-            .init(id: "pageup", label: "PGUP", name: "page up", action: .send([0x1b, 0x5b, 0x35, 0x7e])),
-            .init(id: "pagedown", label: "PGDN", name: "page down", action: .send([0x1b, 0x5b, 0x36, 0x7e])),
+            .init(id: "pageup", label: "PGUP", name: "page up", action: .send([0x1b, 0x5b, 0x35, 0x7e]), repeats: true),
+            .init(id: "pagedown", label: "PGDN", name: "page down", action: .send([0x1b, 0x5b, 0x36, 0x7e]), repeats: true),
         ]),
         // Second, ahead of everything except the plain keys, because this is
         // what the row is actually used for: a tmux session with a status bar,
@@ -85,10 +102,31 @@ enum KeyBarCatalog {
             // CSI D/B/A/C. Arrow glyphs, not words: these are the only
             // pictographic labels the bar allows, because every terminal draws
             // them this way.
-            .init(id: "arrow.left", label: "\u{2190}", name: "left arrow", action: .send([0x1b, 0x5b, 0x44])),
-            .init(id: "arrow.down", label: "\u{2193}", name: "down arrow", action: .send([0x1b, 0x5b, 0x42])),
-            .init(id: "arrow.up", label: "\u{2191}", name: "up arrow", action: .send([0x1b, 0x5b, 0x41])),
-            .init(id: "arrow.right", label: "\u{2192}", name: "right arrow", action: .send([0x1b, 0x5b, 0x43])),
+            // Arrows repeat: holding left walks the cursor across a long path
+            // and holding up walks back through history, which is the same
+            // motion a desktop keyboard gives and the reason repeat exists.
+            .init(id: "arrow.left", label: "\u{2190}", name: "left arrow", action: .send([0x1b, 0x5b, 0x44]), repeats: true),
+            .init(id: "arrow.down", label: "\u{2193}", name: "down arrow", action: .send([0x1b, 0x5b, 0x42]), repeats: true),
+            .init(id: "arrow.up", label: "\u{2191}", name: "up arrow", action: .send([0x1b, 0x5b, 0x41]), repeats: true),
+            .init(id: "arrow.right", label: "\u{2192}", name: "right arrow", action: .send([0x1b, 0x5b, 0x43]), repeats: true),
+        ]),
+        // The answer to a held backspace that nobody thinks of on a phone: one
+        // keystroke instead of forty. Every one of these is a readline default,
+        // so they work unchanged in zsh, in bash, and at Claude Code's prompt.
+        // None of them repeats: `^U` and `^A` are idempotent, and a held `^W`
+        // eating a whole command line is exactly the accident this group exists
+        // to prevent.
+        Group(id: "LINE EDITING", entries: [
+            .init(id: "ctrl.w", label: "^W", name: "control W, delete word before the cursor", action: .send([0x17])),
+            .init(id: "ctrl.u", label: "^U", name: "control U, kill to the start of the line", action: .send([0x15])),
+            .init(id: "ctrl.k", label: "^K", name: "control K, kill to the end of the line", action: .send([0x0b])),
+            // `^A` is 0x01, which is also what `set -g prefix C-a` binds. On a
+            // host configured that way tmux eats this key and it never reaches
+            // readline; that host wants `^E` plus the arrows, or tmux's own
+            // `prefix a` passthrough. The byte is correct either way, and
+            // inventing a different one would be worse.
+            .init(id: "ctrl.a", label: "^A", name: "control A, start of line", action: .send([0x01])),
+            .init(id: "ctrl.e", label: "^E", name: "control E, end of line", action: .send([0x05])),
         ]),
         Group(id: "CONTROL CODES", entries: [
             .init(id: "ctrl.c", label: "^C", name: "control C, interrupt", action: .send([0x03])),
@@ -237,6 +275,91 @@ struct ResolvedKey: Identifiable, Hashable {
     let label: String
     let accessibility: String
     let action: KeyBarAction
+    /// Holding the cell repeats the key. See `KeyBarCatalogEntry.repeats` for
+    /// which keys earn this and why the rest do not.
+    var repeats: Bool = false
+}
+
+// MARK: - Press and hold
+
+/// The press-and-hold repeat clock, as a pure function of a clock reading.
+///
+/// This exists because the latency it is answering cannot be removed. Every
+/// `0x7F` is a round trip to the daemon and the shell echoes the erase back, so
+/// a held system backspace deletes at the speed of the link rather than at the
+/// speed of the keyboard, and no amount of local cleverness changes that. What
+/// *can* change is how many keystrokes one hold is worth, and since this app
+/// draws its own keypad it owns the repeat rate outright, which the system
+/// keyboard will never hand over.
+///
+/// Clock-free on purpose: every entry point takes `now`, so the four things that
+/// decide whether a hold feels right — the initial delay, the repeat interval,
+/// that a release stops it, and that a finger leaving the cell stops it too —
+/// are testable without a device, a timer, or a running run loop.
+struct KeyRepeatState: Equatable {
+    /// Long enough that a normal tap never repeats, short enough that a hold
+    /// does not feel stuck. Roughly what iOS itself uses.
+    static let initialDelay: TimeInterval = 0.4
+    /// 25 a second, which is already faster than the system keyboard.
+    static let interval: TimeInterval = 0.04
+    /// 50 a second, once the hold has clearly been deliberate for a while. This
+    /// is the acceleration: a short hold nudges, a long one sweeps.
+    static let fastInterval: TimeInterval = 0.02
+    /// Repeats at the slow rate before the fast one takes over. Eight repeats at
+    /// 40ms is about a third of a second of holding past the initial delay.
+    static let accelerateAfter = 8
+    /// The most repeats one `due(now:)` may hand back. A stalled main thread — a
+    /// 4 MiB `cat` landing mid-hold — must not be paid back as forty backspaces
+    /// in one frame.
+    static let maxCatchUp = 4
+
+    private(set) var isHeld = false
+    /// How many repeats this hold has produced. Survives the release, so the
+    /// release can tell a tap from a hold and not send one extra key.
+    private(set) var repeats = 0
+    private var dueAt: TimeInterval = 0
+
+    /// The interval owed after `repeats` repeats have already gone out.
+    static func interval(afterRepeats repeats: Int) -> TimeInterval {
+        repeats >= accelerateAfter ? fastInterval : interval
+    }
+
+    /// The finger went down. Nothing is sent here: the tap itself is the
+    /// button's own business, and repeating starts only after `initialDelay`.
+    mutating func press(now: TimeInterval) {
+        isHeld = true
+        repeats = 0
+        dueAt = now + Self.initialDelay
+    }
+
+    /// The finger came up, or left the cell. Same answer either way, which is
+    /// the point: a key that keeps firing after the thumb has slid off it is
+    /// worse than one that does not repeat at all.
+    mutating func release() {
+        isHeld = false
+    }
+
+    /// How many repeats are owed at `now`, advancing the schedule by that many.
+    mutating func due(now: TimeInterval) -> Int {
+        guard isHeld else { return 0 }
+        var count = 0
+        while now >= dueAt && count < Self.maxCatchUp {
+            count += 1
+            repeats += 1
+            dueAt += Self.interval(afterRepeats: repeats)
+        }
+        // Whatever the catch-up ceiling refused is dropped rather than carried:
+        // the schedule restarts from now, so a stall costs keystrokes instead of
+        // producing a burst after it.
+        if count == Self.maxCatchUp, now >= dueAt {
+            dueAt = now + Self.interval(afterRepeats: repeats)
+        }
+        return count
+    }
+
+    /// True once this hold has sent at least one repeat, which is how the
+    /// release knows not to send one more.
+    var didRepeat: Bool { repeats > 0 }
 }
 
 extension KeyBarKey {
@@ -249,7 +372,8 @@ extension KeyBarKey {
         if let catalogID {
             guard let entry = KeyBarCatalog.entry(id: catalogID) else { return nil }
             return ResolvedKey(id: id, label: entry.label,
-                               accessibility: entry.name, action: entry.action)
+                               accessibility: entry.name, action: entry.action,
+                               repeats: entry.repeats)
         }
         let trimmedLabel = label.trimmingCharacters(in: .whitespaces)
         // The template, not the bytes: a sequence written with `\L` only becomes

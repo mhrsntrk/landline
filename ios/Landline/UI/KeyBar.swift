@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 
 /// The keys a shell needs that a phone keyboard does not have, drawn as an
 /// instrument keypad rather than as iOS buttons: mono micro-caps labels, 0.5pt
@@ -108,18 +109,25 @@ struct KeyBar: View {
     /// is known. A key that needs this host's leader and cannot get one is
     /// disabled and sends nothing, the same treatment `LDR` gets, rather than
     /// falling back to tmux's default prefix and typing into a live shell.
+    @ViewBuilder
     private func sendKey(_ key: ResolvedKey, template: KeySequence.Template) -> some View {
         let bytes = template.resolve(leaderByte: leaderByte)
-        return Button {
-            if let bytes, !bytes.isEmpty { send?(bytes) }
-        } label: {
-            Text(key.label)
+        let label = Text(bytes == nil
+                         ? "\(key.accessibility), unavailable, this host has no leader"
+                         : key.accessibility)
+        if key.repeats, let bytes, !bytes.isEmpty, let send {
+            RepeatingKeyCell(key: key, bytes: bytes, send: send)
+                .accessibilityLabel(label)
+        } else {
+            Button {
+                if let bytes, !bytes.isEmpty { send?(bytes) }
+            } label: {
+                Text(key.label)
+            }
+            .buttonStyle(KeyCellStyle(latched: false))
+            .disabled(bytes == nil)
+            .accessibilityLabel(label)
         }
-        .buttonStyle(KeyCellStyle(latched: false))
-        .disabled(bytes == nil)
-        .accessibilityLabel(Text(bytes == nil
-                                 ? "\(key.accessibility), unavailable, this host has no leader"
-                                 : key.accessibility))
     }
 
     /// Ctrl, Alt and Leader latch independently, because `C-a C-o` is a real
@@ -142,6 +150,82 @@ struct KeyBar: View {
     }
 }
 
+// MARK: - Press and hold
+
+/// A key that repeats while it is held.
+///
+/// The tap path is unchanged: the button's own action still fires on lift, so a
+/// quick tap sends exactly one key and VoiceOver activation still works. The
+/// hold path rides the button's press state, which is what already knows that a
+/// thumb sliding off the cell is no longer a press.
+private struct RepeatingKeyCell: View {
+    let key: ResolvedKey
+    let bytes: [UInt8]
+    let send: ([UInt8]) -> Void
+
+    /// A reference type in `@State` on purpose: it is a clock, not a value the
+    /// body reads, so it must survive a re-render without causing one.
+    @State private var driver = KeyRepeatDriver()
+
+    var body: some View {
+        Button {
+            // A hold has already sent everything this key owes. The action still
+            // fires on lift, so without this every hold would end with one extra
+            // keystroke.
+            if !driver.didRepeat { send(bytes) }
+        } label: {
+            Text(key.label)
+        }
+        .buttonStyle(KeyCellStyle(latched: false) { pressed in
+            if pressed {
+                driver.press { send(bytes) }
+            } else {
+                driver.release()
+            }
+        })
+    }
+}
+
+/// Runs `KeyRepeatState` against a real clock and fires the key.
+///
+/// One coarse tick that asks the state machine how many repeats are owed, rather
+/// than a timer rescheduled at every new interval: the acceleration then costs
+/// nothing, and a tick that arrives late pays back what it missed instead of
+/// letting the whole hold drift slower. `.common` mode so a scroll elsewhere on
+/// screen cannot starve a held key.
+private final class KeyRepeatDriver {
+    private var state = KeyRepeatState()
+    private var timer: Timer?
+
+    var didRepeat: Bool { state.didRepeat }
+
+    func press(_ fire: @escaping () -> Void) {
+        stop()
+        state.press(now: CACurrentMediaTime())
+        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let due = self.state.due(now: CACurrentMediaTime())
+            for _ in 0..<due { fire() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    /// The finger came up, or left the cell. `state.release()` keeps the repeat
+    /// count so the button's action can still tell a tap from a hold.
+    func release() {
+        state.release()
+        stop()
+    }
+
+    private func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    deinit { timer?.invalidate() }
+}
+
 /// Default, pressed, latched, latched-and-pressed, and disabled for one key
 /// cell. The latched state is the one that has to read at a glance in a dark
 /// room: the cell inverts to the accent and the label goes to the ground
@@ -149,14 +233,24 @@ struct KeyBar: View {
 /// that disarms a wrong modifier gives feedback instead of looking inert.
 private struct KeyCellStyle: ButtonStyle {
     var latched: Bool
+    /// Told when the press starts and when it stops, which for a repeating key
+    /// is the whole hold. SwiftUI already treats a thumb sliding off the cell as
+    /// the end of the press, which is exactly the rule a repeat needs.
+    var onPressChange: ((Bool) -> Void)?
+
+    init(latched: Bool, onPressChange: ((Bool) -> Void)? = nil) {
+        self.latched = latched
+        self.onPressChange = onPressChange
+    }
 
     func makeBody(configuration: Configuration) -> some View {
-        StatefulBody(configuration: configuration, latched: latched)
+        StatefulBody(configuration: configuration, latched: latched, onPressChange: onPressChange)
     }
 
     private struct StatefulBody: View {
         let configuration: ButtonStyleConfiguration
         let latched: Bool
+        let onPressChange: ((Bool) -> Void)?
         @Environment(\.isEnabled) private var isEnabled
 
         private var foreground: Color {
@@ -180,6 +274,9 @@ private struct KeyCellStyle: ButtonStyle {
                 .background(background)
                 .contentShape(Rectangle())
                 .animation(Theme.Motion.state, value: latched)
+                .onChange(of: configuration.isPressed) { _, pressed in
+                    onPressChange?(pressed)
+                }
         }
     }
 }

@@ -160,6 +160,20 @@ final class LatchStateTests: XCTestCase {
         XCTAssertEqual(latches.consume([0x63], leaderByte: leader), [0x63], "no prefix once disarmed")
     }
 
+    /// The invariant `TerminalScreen.sendUserInput` now leans on: with nothing
+    /// armed, `consume` is the identity. That is what lets the common keystroke
+    /// skip the call entirely, and skipping it is what stops every byte typed
+    /// from writing `@State` and re-rendering the whole screen — 25 to 50 times
+    /// a second under a held key.
+    func testAnUnarmedConsumeIsTheIdentity() {
+        var latches = LatchState()
+        XCTAssertFalse(latches.isAnyArmed)
+        for payload: [UInt8] in [[0x7f], [0x1b, 0x5b, 0x41], [0x03], Array("hello".utf8)] {
+            XCTAssertEqual(latches.consume(payload, leaderByte: 0x01), payload)
+            XCTAssertFalse(latches.isAnyArmed, "consuming nothing must not arm anything")
+        }
+    }
+
     func testClearDropsEverything() {
         var latches = LatchState()
         latches.ctrl = true

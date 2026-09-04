@@ -349,6 +349,325 @@ final class FrameProbe {
     }
 }
 
+// MARK: - Swipe to scroll
+
+/// Turns the finger's vertical travel into whole wheel notches.
+///
+/// Pure and clock-free on purpose. The ratio, the sign convention and the flick
+/// clamp are the three things that decide whether a swipe reads as scrolling or
+/// as a lurch, and all three are testable without a device.
+struct WheelScrollAccumulator: Equatable {
+    /// How many lines one wheel notch moves at the far end. Three is xterm's
+    /// convention and tmux, vim and less all inherit it, so charging one notch
+    /// per three cell heights of travel lands the text roughly where the finger
+    /// left it. That is what "feels like a normal scroll view" means here: the
+    /// ratio is derived from the cell height rather than from a magic constant,
+    /// so a 9pt font scrolls the same distance per swipe as a 22pt one.
+    static let linesPerNotch = 3
+
+    /// The most notches one callback may charge. A fast flick arrives as a
+    /// single large translation, and without a ceiling that one callback puts
+    /// hundreds of wheel events on the wire in one frame, which the far end then
+    /// chews through for seconds after the finger has stopped. Four notches is
+    /// twelve lines, about half a phone screen.
+    static let maxNotchesPerStep = 4
+
+    /// Points of travel one notch costs.
+    let pointsPerNotch: CGFloat
+    /// Travel not yet paid out as a whole notch. A swipe is a hundred small
+    /// callbacks, most of them worth less than one notch, so the remainder has
+    /// to survive between them or a slow drag scrolls nothing at all.
+    private(set) var carry: CGFloat = 0
+
+    /// A zero or absurd cell height would divide by nothing; 1pt is the floor.
+    init(cellHeight: CGFloat) {
+        pointsPerNotch = max(1, cellHeight) * CGFloat(Self.linesPerNotch)
+    }
+
+    /// Positive `delta` is the finger travelling *down* the screen, which
+    /// reveals earlier output, which is a wheel notch **up**. Returns a signed
+    /// notch count: positive up, negative down, zero when nothing is owed yet.
+    mutating func notches(forTranslation delta: CGFloat) -> Int {
+        guard delta.isFinite else { return 0 }
+        carry += delta
+        var notches = Int((carry / pointsPerNotch).rounded(.towardZero))
+        guard notches != 0 else { return 0 }
+        carry -= CGFloat(notches) * pointsPerNotch
+        if abs(notches) > Self.maxNotchesPerStep {
+            notches = notches < 0 ? -Self.maxNotchesPerStep : Self.maxNotchesPerStep
+            // The overflow is dropped rather than paid out over the following
+            // frames. A flick should stop when the flick stops; a queue that
+            // keeps firing after the finger has gone reads as the terminal
+            // running away.
+            carry = 0
+        }
+        return notches
+    }
+
+    mutating func reset() { carry = 0 }
+}
+
+/// The coast after a flick.
+///
+/// A wheel event carries no momentum of its own — the far end sees discrete
+/// notches — so if the gesture stops dead when the finger lifts, reading a long
+/// build log means swiping thirty times. This decays the lift-off velocity and
+/// keeps charging notches out of it, which is the same thing a scroll view does
+/// and the reason its momentum has to be reproduced rather than borrowed.
+struct FlickDecay: Equatable {
+    /// Per-frame friction at 60Hz, resampled for whatever the display actually
+    /// gives us.
+    static let frictionPerFrame: CGFloat = 0.94
+    /// Below this the coast has visually stopped.
+    static let stopSpeed: CGFloat = 60
+    /// A flick off a ProMotion panel can report five figures. Clamped, because
+    /// past this the notch ceiling is doing all the work anyway.
+    static let maxSpeed: CGFloat = 6000
+
+    private(set) var velocity: CGFloat
+
+    init(velocity: CGFloat) {
+        let finite = velocity.isFinite ? velocity : 0
+        self.velocity = min(max(finite, -Self.maxSpeed), Self.maxSpeed)
+        if abs(self.velocity) < Self.stopSpeed { self.velocity = 0 }
+    }
+
+    var isCoasting: Bool { velocity != 0 }
+
+    /// Advances by `dt` seconds and answers with the distance travelled, in
+    /// points, for the accumulator to charge.
+    mutating func step(dt: CGFloat) -> CGFloat {
+        guard isCoasting, dt > 0, dt.isFinite else { return 0 }
+        let distance = velocity * dt
+        velocity *= pow(Self.frictionPerFrame, dt * 60)
+        if abs(velocity) < Self.stopSpeed { velocity = 0 }
+        return distance
+    }
+}
+
+/// Makes a vertical swipe over the terminal scroll while the far end is reading
+/// the mouse.
+///
+/// The diagnosis, read out of the SwiftTerm sources rather than assumed:
+///
+///   * `Terminal.swift` says outright that it "only tracks the mode's state
+///     here; translating wheel events is left to the" embedding app.
+///   * `iOSTerminalView.panMouseHandler` turns a pan into button press, motion,
+///     release — a **drag**. Under `set -g mouse on`, tmux reads a drag as a
+///     selection. That is correct behaviour for a drag, and it is exactly what
+///     the owner saw when he tried to scroll.
+///   * Scrolling needs **wheel** events: buttons 4 and 5, which
+///     `Terminal.encodeButton` maps into the 64/65 range.
+///
+/// So this installs one pan recogniser of its own and fires wheel notches out of
+/// it. Three deliberate boundaries:
+///
+///   * **`mouseMode == .off` is left alone.** `TerminalView` is a `UIScrollView`
+///     and its `drawTerminalContents` picks the first visible row out of
+///     `contentOffset.y`, not out of `yDisp`; its own pan therefore already
+///     scrolls the scrollback, with momentum, rubber banding and an indicator.
+///     `scrollUp(lines:)` cannot stand in for that mid-drag, because
+///     `updateScroller` early-returns while `isTracking` — the row moves and no
+///     pixel does until the finger lifts. Declining the gesture there is both
+///     less code and a better scroll than anything written here.
+///   * **A live selection wins.** Long press, Select, then drag is the only way
+///     to select text with mouse reporting on, and it stays that way.
+///   * **Horizontal drags are not ours.** They fall through to SwiftTerm's mouse
+///     pan, which is tmux's own drag-to-select.
+///
+/// `allowMouseReporting` is deliberately left `true`: turning it off would fix
+/// the swipe by breaking tmux pane and window clicking, which is worth keeping.
+///
+/// Main thread only, like `TerminalController`: UIKit gestures and the display
+/// link both arrive there and nothing else touches this.
+final class TerminalSwipeScroller: NSObject, UIGestureRecognizerDelegate {
+    private weak var view: TerminalView?
+    private var pan: UIPanGestureRecognizer?
+
+    private var accumulator = WheelScrollAccumulator(cellHeight: 1)
+    /// Where the wheel is reported from. Frozen at lift-off, so the coast keeps
+    /// reporting into the pane the finger was over.
+    private var reportPoint: CGPoint = .zero
+
+    private var decay: FlickDecay?
+    private var coastLink: CADisplayLink?
+    private var lastCoastTime: CFTimeInterval = 0
+
+    func attach(to view: TerminalView) {
+        detach()
+        self.view = view
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = self
+        view.addGestureRecognizer(pan)
+        self.pan = pan
+    }
+
+    func detach() {
+        stopCoasting()
+        if let pan, let view { view.removeGestureRecognizer(pan) }
+        pan = nil
+        view = nil
+    }
+
+    deinit {
+        coastLink?.invalidate()
+    }
+
+    // MARK: Gesture
+
+    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+        guard let view else { return }
+        switch gesture.state {
+        case .began:
+            stopCoasting()
+            accumulator = WheelScrollAccumulator(cellHeight: Self.cellHeight(of: view))
+            reportPoint = gesture.location(in: view)
+        case .changed:
+            let translation = gesture.translation(in: view)
+            // Reset every callback so `translation` is a delta rather than the
+            // total; the accumulator carries the remainder itself.
+            gesture.setTranslation(.zero, in: view)
+            reportPoint = gesture.location(in: view)
+            emit(accumulator.notches(forTranslation: translation.y))
+        case .ended:
+            startCoasting(velocity: gesture.velocity(in: view).y)
+        case .cancelled, .failed:
+            stopCoasting()
+        default:
+            break
+        }
+    }
+
+    /// Vertical, mouse-reporting, no live selection. Anything else is somebody
+    /// else's gesture and this one fails immediately so they can have it.
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer, pan === self.pan,
+              let view else { return true }
+        guard view.getTerminal().mouseMode != .off else { return false }
+        guard !view.selectionActive else { return false }
+        let translation = pan.translation(in: view)
+        return abs(translation.y) > abs(translation.x)
+    }
+
+    /// How the conflict with SwiftTerm's own recognisers is resolved.
+    ///
+    /// Returning true here means the *other* recogniser waits until this one has
+    /// failed, so a vertical swipe reaches this handler and never reaches
+    /// `panMouseHandler`. It is asked per pair and re-asked every touch, which is
+    /// what makes it the right tool: `panMouseGesture` is created lazily by
+    /// `mouseModeChanged` and `panSelectionGesture` by a selection, so neither
+    /// exists at the moment this scroller is attached and a static
+    /// `require(toFail:)` could not name them. Nothing is removed from the view,
+    /// so every gesture SwiftTerm installs is still there and still works the
+    /// moment `gestureRecognizerShouldBegin` above declines.
+    ///
+    /// Taps and the long press are untouched: only pans are claimed.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === pan, other is UIPanGestureRecognizer else { return false }
+        // In a plain shell this scroller does nothing, so it must not insert
+        // itself into the scroll view's own gesture graph either.
+        guard let view, view.getTerminal().mouseMode != .off else { return false }
+        return true
+    }
+
+    // MARK: Coasting
+
+    private func startCoasting(velocity: CGFloat) {
+        let decay = FlickDecay(velocity: velocity)
+        guard decay.isCoasting else { return }
+        self.decay = decay
+        lastCoastTime = CACurrentMediaTime()
+        let link = CADisplayLink(target: self, selector: #selector(coast(_:)))
+        link.add(to: .main, forMode: .common)
+        coastLink = link
+    }
+
+    private func stopCoasting() {
+        coastLink?.invalidate()
+        coastLink = nil
+        decay = nil
+        accumulator.reset()
+    }
+
+    @objc private func coast(_ link: CADisplayLink) {
+        guard var decay else {
+            stopCoasting()
+            return
+        }
+        // Clamped both ways: a first tick with a stale timestamp would charge a
+        // huge distance, and a stalled main thread would charge one just as big.
+        let dt = min(max(link.timestamp - lastCoastTime, 1.0 / 120), 1.0 / 20)
+        lastCoastTime = link.timestamp
+        let distance = decay.step(dt: CGFloat(dt))
+        self.decay = decay
+        emit(accumulator.notches(forTranslation: distance))
+        if !decay.isCoasting { stopCoasting() }
+    }
+
+    // MARK: Emission
+
+    private func emit(_ notches: Int) {
+        guard notches != 0, let view else { return }
+        let terminal = view.getTerminal()
+        // The mode can change under a coast — an application exiting drops mouse
+        // reporting — so it is re-read per emission rather than latched.
+        guard terminal.mouseMode != .off else {
+            stopCoasting()
+            return
+        }
+        let hit = Self.cell(of: view, at: reportPoint)
+        // Button 4 is a wheel notch up and 5 is down; `encodeButton` maps them
+        // to 64 and 65, the range xterm reserves for the wheel. Press with no
+        // release: a notch has no release, and asking for one would encode a 3
+        // and land as a button-up at the far end.
+        let flags = terminal.encodeButton(button: notches > 0 ? 4 : 5,
+                                          release: false,
+                                          shift: false,
+                                          meta: false,
+                                          control: false)
+        for _ in 0..<abs(notches) {
+            terminal.sendEvent(buttonFlags: flags,
+                               x: hit.col,
+                               y: hit.row,
+                               pixelX: hit.pixelX,
+                               pixelY: hit.pixelY)
+        }
+    }
+
+    /// The cell height, derived from the laid-out grid rather than from
+    /// SwiftTerm's `cellDimension`, which is internal to the package. `rows` is
+    /// itself `floor(height / cellHeight)`, so this overstates by less than one
+    /// row's worth across the whole viewport — irrelevant to a scroll ratio, and
+    /// self-correcting when the font size changes.
+    private static func cellHeight(of view: TerminalView) -> CGFloat {
+        let rows = view.getTerminal().rows
+        guard rows > 0, view.bounds.height > 0 else { return 16 }
+        return view.bounds.height / CGFloat(rows)
+    }
+
+    /// Where the wheel notch is reported from, in screen cells.
+    ///
+    /// `location(in:)` on a scroll view answers in *content* coordinates, and a
+    /// mouse report wants the screen cell, so the offset comes back out first.
+    /// tmux uses this to decide which pane scrolls, which is why the touch point
+    /// is carried at all rather than reporting the cursor cell.
+    private static func cell(of view: TerminalView,
+                             at point: CGPoint) -> (col: Int, row: Int, pixelX: Int, pixelY: Int) {
+        let terminal = view.getTerminal()
+        let bounds = view.bounds
+        let visibleX = min(max(point.x - view.contentOffset.x, 0), max(bounds.width - 1, 0))
+        let visibleY = min(max(point.y - view.contentOffset.y, 0), max(bounds.height - 1, 0))
+        let cellWidth = terminal.cols > 0 && bounds.width > 0
+            ? bounds.width / CGFloat(terminal.cols) : 8
+        let cellHeight = Self.cellHeight(of: view)
+        let col = min(max(Int(visibleX / max(cellWidth, 1)), 0), max(terminal.cols - 1, 0))
+        let row = min(max(Int(visibleY / max(cellHeight, 1)), 0), max(terminal.rows - 1, 0))
+        return (col, row, Int(visibleX), Int(visibleY))
+    }
+}
+
 // MARK: - TerminalController
 
 /// Owns the UIKit terminal and every byte that reaches it.
@@ -1332,6 +1651,10 @@ struct SwiftTermView: UIViewRepresentable {
                                              action: #selector(Coordinator.handlePinch(_:)))
         view.addGestureRecognizer(pinch)
         context.coordinator.controller = controller
+        // A vertical swipe scrolls, whatever is running at the far end. See
+        // `TerminalSwipeScroller` for why this cannot be left to SwiftTerm once
+        // an application turns mouse reporting on.
+        context.coordinator.scroller.attach(to: view)
 
         DispatchQueue.main.async {
             _ = view.becomeFirstResponder()
@@ -1344,6 +1667,7 @@ struct SwiftTermView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ uiView: TerminalView, coordinator: Coordinator) {
+        coordinator.scroller.detach()
         coordinator.controller?.detach()
     }
 
@@ -1353,6 +1677,9 @@ struct SwiftTermView: UIViewRepresentable {
 
     final class Coordinator: NSObject, TerminalViewDelegate, UIGestureRecognizerDelegate {
         weak var controller: TerminalController?
+        /// Owned here rather than by `TerminalController` because it is a
+        /// gesture, not a byte path: it lives and dies with the UIView.
+        let scroller = TerminalSwipeScroller()
         private var pinchStartSize: CGFloat = TerminalFont.defaultSize
 
         init(controller: TerminalController) {
