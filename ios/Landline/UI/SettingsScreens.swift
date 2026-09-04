@@ -18,6 +18,11 @@ import SwiftUI
 /// rather than described: the key bar draws itself, and the scroll speed states
 /// the travel one notch costs.
 struct SettingsView: View {
+    /// A push in compact width, where this screen sits on the index's stack,
+    /// and the root of a sheet in regular width, where the index is a sidebar
+    /// and there is nothing behind this to go back to.
+    var leading: HeaderLeading = .back
+
     @Environment(SettingsStore.self) private var settings
 
     @State private var route: Route?
@@ -25,7 +30,7 @@ struct SettingsView: View {
     enum Route: String, Hashable { case keyBar }
 
     var body: some View {
-        SettingScreen(title: "SETTINGS", annotation: "APP-WIDE / EVERY HOST") {
+        SettingScreen(title: "SETTINGS", annotation: "APP-WIDE / EVERY HOST", leading: leading) {
             proseText("These apply to every machine. What differs between machines, like the palette, the font and the tmux leader, is set on the host itself.")
                 .llProse()
                 .fixedSize(horizontal: false, vertical: true)

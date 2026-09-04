@@ -6,8 +6,22 @@ import LocalAuthentication
 // mono with tabular figures, and the columns line up down the page.
 
 struct HostListView: View {
+    /// Non-nil when this view is a split view's sidebar: choosing a host sets
+    /// the selection the detail pane reads instead of pushing a screen, and the
+    /// chosen row stays marked because it is still on screen beside its
+    /// terminal. Nil is the stack, which is every phone.
+    var selection: Binding<UUID?>?
+    /// The settings route, in the shape the split view needs. In the stack this
+    /// view still owns its own push.
+    var settingsPresented: Binding<Bool>?
+
     @Environment(HostStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
+
+    /// The sidebar of a split view, rather than the root of a stack. Named
+    /// rather than tested inline, because it changes four separate decisions on
+    /// this screen and each of them should say which one it is answering.
+    private var isSidebar: Bool { selection != nil }
 
     @State private var reachability = HostReachability()
     @State private var editingHost: Host?
@@ -29,7 +43,10 @@ struct HostListView: View {
         VStack(spacing: 0) {
             header
             if store.hosts.isEmpty {
-                EmptyIndexView { showingAddSheet = true }
+                // In the split the detail pane is already teaching the
+                // mechanism at a readable measure, so the 300pt column does not
+                // print the same two shell commands a second time in a ribbon.
+                EmptyIndexView(dense: isSidebar) { showingAddSheet = true }
             } else {
                 index
             }
@@ -52,6 +69,9 @@ struct HostListView: View {
                 reachability.probe([updated])
             }
         }
+        // The stack's own pushes. A sidebar never sets either route — it writes
+        // the selection binding instead, and the detail pane is the destination
+        // — so both stay nil there and neither push can fire.
         .navigationDestination(item: $openedHost) { host in
             TerminalScreen(host: host)
         }
@@ -67,8 +87,13 @@ struct HostListView: View {
         .task {
             DemoSeed.seedIfRequested(into: store)
             if DemoSeed.opensEditor, let first = store.hosts.first { editingHost = first }
-            if DemoSeed.opensTerminal, let first = store.hosts.first { openedHost = first }
-            if DemoSeed.opensSettings { settingsRoute = .settings }
+            // The two screenshot hooks that name a *route* are the stack's. In a
+            // split view `RootView` drives the same two, because there the
+            // destination is the detail pane and the sheet, not a push.
+            if !isSidebar {
+                if DemoSeed.opensTerminal, let first = store.hosts.first { openedHost = first }
+                if DemoSeed.opensSettings { settingsRoute = .settings }
+            }
             reachability.probe(store.hosts)
             // 30s is finer than the coarsest unit the age column prints, so the
             // number is never stale by more than one glyph.
@@ -140,7 +165,11 @@ struct HostListView: View {
     /// own padding so the strip does not grow to hold it.
     private var settingsControl: some View {
         Button {
-            settingsRoute = .settings
+            if let settingsPresented {
+                settingsPresented.wrappedValue = true
+            } else {
+                settingsRoute = .settings
+            }
         } label: {
             // No `MicroLabel` and no `llValue` here: both set their own colour,
             // which would win over the style's and leave the control with no
@@ -173,10 +202,13 @@ struct HostListView: View {
                 Button {
                     open(host)
                 } label: {
-                    HostRow(host: host, level: reachability.level(for: host), now: now)
+                    HostRow(host: host,
+                            level: reachability.level(for: host),
+                            now: now,
+                            dense: isSidebar)
                         .background { extentReporter }
                 }
-                .buttonStyle(InstrumentRowButtonStyle())
+                .buttonStyle(InstrumentRowButtonStyle(selected: isSelected(host)))
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
                 .listRowBackground(Theme.ground)
@@ -231,9 +263,24 @@ struct HostListView: View {
 
     // MARK: - Actions
 
+    private func isSelected(_ host: Host) -> Bool {
+        selection?.wrappedValue == host.id
+    }
+
+    /// Opening means "push a terminal" in the stack and "point the detail pane
+    /// at this machine" in the split. One function, so the Face ID gate in
+    /// front of it cannot be right in one shape and missing in the other.
+    private func reveal(_ host: Host) {
+        if let selection {
+            selection.wrappedValue = host.id
+        } else {
+            openedHost = host
+        }
+    }
+
     private func open(_ host: Host) {
         guard host.requireFaceID else {
-            openedHost = host
+            reveal(host)
             return
         }
         // Client-side and therefore cosmetic (SCOPE.md 8); the unlock secret
@@ -250,7 +297,7 @@ struct HostListView: View {
         ) { success, evalError in
             DispatchQueue.main.async {
                 if success {
-                    openedHost = host
+                    reveal(host)
                 } else if let evalError {
                     authError = evalError.localizedDescription
                 }
@@ -344,6 +391,10 @@ private struct HostRow: View {
     let host: Host
     let level: StatusSquare.Level
     let now: Date
+    /// The sidebar column, at roughly two thirds of the width the same row gets
+    /// on a phone once its gutters are paid. See the `Lines` note below for
+    /// what that costs and why.
+    var dense: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Metric.grid * 3) {
@@ -351,35 +402,9 @@ private struct HostRow: View {
                 // Optically aligned with the cap height of the name line.
                 .padding(.top, Theme.Metric.grid + 2)
             VStack(alignment: .leading, spacing: Theme.Metric.grid + 2) {
-                HStack(alignment: .firstTextBaseline, spacing: Theme.Metric.grid * 2) {
-                    Text(host.displayName)
-                        .llValueStrong()
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: Theme.Metric.grid * 2)
-                    Text(host.shellLabel)
-                        .llValue(Theme.ink)
-                        .frame(width: 52, alignment: .trailing)
-                    Text(host.sessionAgeLabel(now: now))
-                        .llValue(Theme.inkMuted)
-                        .frame(width: 32, alignment: .trailing)
-                }
-                // The two right-hand columns are a measured scale; letting them
-                // grow with Dynamic Type would wrap them and destroy the
-                // alignment that makes this read as one drawing. Capped on
-                // purpose; the name and the annotations below still scale.
-                .llMeasuredColumn()
-
-                HStack(alignment: .firstTextBaseline, spacing: Theme.Metric.grid * 2) {
-                    // String(port), not "\(port)": SwiftUI's localized
-                    // interpolation would group the digits and print 8.443.
-                    Text("\(host.hostname):" + String(host.port))
-                        .llValue(Theme.inkMuted)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                    Spacer(minLength: Theme.Metric.grid * 2)
-                    flags
-                }
+                nameLine
+                endpointLine
+                if dense { denseFlags }
             }
         }
         .padding(.horizontal, Theme.Metric.gutter)
@@ -391,6 +416,92 @@ private struct HostRow: View {
         .accessibilityLabel(Text("\(host.displayName), \(host.hostname), \(level.label)"))
     }
 
+    // MARK: Lines
+    //
+    // Two layouts, on purpose, because the row is asked to hold the same facts
+    // at two very different widths.
+    //
+    // A phone gives this row about 430pt and it spends them on two lines of
+    // four columns. The sidebar gives it 300 to 380pt, of which the gutters and
+    // the status square take 54, and at that width the phone's arrangement does
+    // not compress, it *lies*: the shell column and the age column squeeze the
+    // hostname to a stub, and a line reading `…4f1a.ts.net:443` beside
+    // `…w -A -s main` tells you nothing about any machine. Truncating every
+    // column equally is not a narrow layout, it is a wide layout that has
+    // stopped working.
+    //
+    // So the sidebar drops a column and stacks the rest. The shell leaves the
+    // value line and joins the flags as a micro-caps mark, where it costs three
+    // glyphs instead of a 52pt column. The startup command stops being echoed:
+    // it is the longest string the row can hold, it is the one fact here that
+    // is a *setting* rather than a state, and the host editor already prints
+    // it, so `CMD` stays as the presence mark, which is what a glance actually
+    // asks. What keeps its full width is the name, the endpoint and the age,
+    // which are the three facts a machine is picked by.
+
+    private var nameLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Metric.grid * 2) {
+            Text(host.displayName)
+                .llValueStrong()
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: Theme.Metric.grid * 2)
+            if !dense {
+                Text(host.shellLabel)
+                    .llValue(Theme.ink)
+                    .frame(width: 52, alignment: .trailing)
+            }
+            Text(host.sessionAgeLabel(now: now))
+                .llValue(Theme.inkMuted)
+                .frame(width: 32, alignment: .trailing)
+        }
+        // The right-hand columns are a measured scale; letting them grow with
+        // Dynamic Type would wrap them and destroy the alignment that makes
+        // this read as one drawing. Capped on purpose; the name and the
+        // annotations below still scale.
+        .llMeasuredColumn()
+    }
+
+    private var endpointLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Metric.grid * 2) {
+            // String(port), not "\(port)": SwiftUI's localized
+            // interpolation would group the digits and print 8.443.
+            Text("\(host.hostname):" + String(host.port))
+                .llValue(Theme.inkMuted)
+                .lineLimit(1)
+                .truncationMode(.head)
+            if !dense {
+                Spacer(minLength: Theme.Metric.grid * 2)
+                flags
+            }
+        }
+    }
+
+    /// The sidebar's own line: every remaining fact reduced to a mark, in a
+    /// fixed order left to right, so the column reads down the page as a set of
+    /// ticked boxes rather than as four ragged fragments.
+    private var denseFlags: some View {
+        HStack(spacing: Theme.Metric.grid * 3) {
+            MicroLabel(HostRow.shellMark(host.shellLabel))
+            if !host.startCommand.isEmpty { MicroLabel("CMD") }
+            if host.requireFaceID { MicroLabel("FACE ID") }
+            MicroLabel(host.useTLS ? "TLS" : "PLAIN", color: host.useTLS ? Theme.inkMuted : Theme.warn)
+            Spacer(minLength: 0)
+        }
+        .lineLimit(1)
+        .llMeasuredColumn()
+        .padding(.top, Theme.Metric.grid)
+    }
+
+    /// The shell as a flag rather than as a column. `Host.shellLabel` prints an
+    /// em dash when the daemon has not said yet, and a bare dash in a row of
+    /// words reads as a missing glyph rather than as a fact.
+    static func shellMark(_ shellLabel: String) -> String {
+        shellLabel == "\u{2014}" ? "NO SHELL" : shellLabel.uppercased()
+    }
+
+    /// The phone's flag cluster: the startup command echoed in full, because
+    /// there is room for it.
     @ViewBuilder
     private var flags: some View {
         HStack(spacing: Theme.Metric.grid * 2) {
@@ -421,6 +532,9 @@ private struct HostRow: View {
 // `tailscale serve` fronts it. Sentences are SF Pro, commands are mono.
 
 private struct EmptyIndexView: View {
+    /// The sidebar column. The detail pane beside it is already printing the
+    /// setup, so this reduces to the one thing the column is for.
+    var dense: Bool = false
     let addHost: () -> Void
 
     var body: some View {
@@ -428,39 +542,18 @@ private struct EmptyIndexView: View {
             VStack(alignment: .leading, spacing: Theme.Metric.grid * 5) {
                 MicroLabel("NO HOSTS")
 
-                Text("Landline reaches machines you already own, over your own tailnet. A machine appears here once two things are true on it.")
+                Text(dense
+                     ? "Nothing in the index yet. The pane beside this one says what has to be running on the machine first."
+                     : "Landline reaches machines you already own, over your own tailnet. A machine appears here once two things are true on it.")
                     .llProse()
                     .fixedSize(horizontal: false, vertical: true)
 
-                VStack(alignment: .leading, spacing: Theme.Metric.grid * 4) {
-                    command(
-                        step: "01",
-                        text: "landlined",
-                        note: "The daemon runs on the machine and binds loopback only."
-                    )
-                    Hairline()
-                    command(
-                        step: "02",
-                        text: "tailscale serve --bg --https=443 http://127.0.0.1:7777",
-                        note: "Tailscale terminates TLS and proves who is calling. No open port, no SSH key."
-                    )
+                if !dense {
+                    fullSetup
+                    proseText("Then add the machine's tailnet name, the `\(Host.tailnetExample)` shape that `tailscale status` prints.")
+                        .llProse()
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.vertical, Theme.Metric.grid * 4)
-                .padding(.horizontal, Theme.Metric.gutter)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.panel)
-                .overlay(alignment: .top) { Hairline() }
-                .overlay(alignment: .bottom) { Hairline() }
-                // Two opposite corners only. Four would read as a frame, and a
-                // frame is a card with the fill removed.
-                .overlay { RegistrationMarks(diagonal: .topLeadingBottomTrailing) }
-                // Cancels the page gutter: a region here is bounded by rules
-                // running edge to edge, never by an inset rectangle.
-                .padding(.horizontal, -Theme.Metric.gutter)
-
-                proseText("Then add the machine's tailnet name, the `\(Host.tailnetExample)` shape that `tailscale status` prints.")
-                    .llProse()
-                    .fixedSize(horizontal: false, vertical: true)
 
                 Button("+ ADD HOST", action: addHost)
                     .buttonStyle(InstrumentButtonStyle(emphasis: .primary))
@@ -471,6 +564,34 @@ private struct EmptyIndexView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Theme.ground)
+    }
+
+    private var fullSetup: some View {
+        VStack(alignment: .leading, spacing: Theme.Metric.grid * 4) {
+            command(
+                step: "01",
+                text: "landlined",
+                note: "The daemon runs on the machine and binds loopback only."
+            )
+            Hairline()
+            command(
+                step: "02",
+                text: "tailscale serve --bg --https=443 http://127.0.0.1:7777",
+                note: "Tailscale terminates TLS and proves who is calling. No open port, no SSH key."
+            )
+        }
+        .padding(.vertical, Theme.Metric.grid * 4)
+        .padding(.horizontal, Theme.Metric.gutter)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.panel)
+        .overlay(alignment: .top) { Hairline() }
+        .overlay(alignment: .bottom) { Hairline() }
+        // Two opposite corners only. Four would read as a frame, and a
+        // frame is a card with the fill removed.
+        .overlay { RegistrationMarks(diagonal: .topLeadingBottomTrailing) }
+        // Cancels the page gutter: a region here is bounded by rules
+        // running edge to edge, never by an inset rectangle.
+        .padding(.horizontal, -Theme.Metric.gutter)
     }
 
     private func command(step: String, text: String, note: String) -> some View {
@@ -580,10 +701,36 @@ enum DemoSeed {
     /// looked at rather than reasoned about.
     static var showsValidation: Bool { mode == "editerror" }
 
+    /// Debug hook for the split view's resize path, which is the one thing on
+    /// an iPad that cannot be checked from a single still: hide the index
+    /// column a few seconds in and show it again a few seconds after that, so
+    /// two screenshots of the *same running session* can be compared. The
+    /// header's `GEOM` readout is written only by `TerminalController.onResize`,
+    /// which is the same closure that sends the RESIZE frame, so a `GEOM` that
+    /// changed between the two stills is proof the daemon was told.
+    static var togglesIndex: Bool { mode == "resize" || mode == "liveresize" }
+
+    /// Debug hook: seed a first host pointing at a `landlined` built with the
+    /// `harness` feature and running on this machine, so a screenshot can hold
+    /// a real attached session instead of a CLOSED band. Deliberately not port
+    /// 7777: that is where a real daemon listens, and a screenshot run has no
+    /// business connecting to it.
+    static var seedsLiveHost: Bool {
+        mode == "live" || mode == "liveresize" || switchesHosts
+    }
+
+    /// Debug hook: attach, point the detail pane at a different machine, then
+    /// point it back, so two stills of the same run can be compared. A session
+    /// the switch *detached* rather than killed comes back with the same `SESS`
+    /// and a still-running age.
+    static var switchesHosts: Bool { mode == "liveswitch" }
+
     /// Debug screenshot hooks for the key bar work: park the run on the
     /// terminal (optionally with the leader already armed), or on one of the
     /// app-wide settings screens, each of which auto-pushes the next.
-    static var opensTerminal: Bool { mode == "terminal" || armsLeader }
+    static var opensTerminal: Bool {
+        mode == "terminal" || armsLeader || togglesIndex || seedsLiveHost
+    }
     static var armsLeader: Bool { mode == "leaderarmed" }
     static var opensSettings: Bool { mode == "settings" || opensKeyBar }
     static var opensKeyBar: Bool { mode == "keybar" || opensCustomKey || opensCatalog }
@@ -605,10 +752,14 @@ enum DemoSeed {
         #if DEBUG
         guard mode != nil, mode != "empty", store.hosts.isEmpty else { return }
         var one = Host()
-        one.name = "studio"
-        one.hostname = showsValidation ? "https://studio tail4f1a" : "studio.tail4f1a.ts.net"
-        one.port = showsValidation ? 0 : 443
-        one.startCommand = "tmux new -A -s main"
+        one.name = seedsLiveHost ? "harness" : "studio"
+        one.hostname = showsValidation ? "https://studio tail4f1a"
+            : (seedsLiveHost ? "127.0.0.1" : "studio.tail4f1a.ts.net")
+        one.port = showsValidation ? 0 : (seedsLiveHost ? 7788 : 443)
+        one.useTLS = !seedsLiveHost
+        // A live run starts tmux for real, because tmux redrawing itself is the
+        // half of the resize path that lives on the far end.
+        one.startCommand = seedsLiveHost ? "tmux new -A -s landline" : "tmux new -A -s main"
         one.leaderKey = "C-a"
         one.lastShell = "/bin/zsh"
         one.lastAttachedAt = Date().addingTimeInterval(-14 * 60)
@@ -632,7 +783,9 @@ enum DemoSeed {
     /// pretending a simulator can reach a real tailnet.
     static func scriptedLevels(for hosts: [Host]) -> [UUID: StatusSquare.Level]? {
         #if DEBUG
-        guard mode != nil, mode != "empty" else { return nil }
+        // A live run probes for real: the whole point of it is that the status
+        // square and the session are telling the truth.
+        guard mode != nil, mode != "empty", !seedsLiveHost else { return nil }
         let script: [StatusSquare.Level] = [.connected, .connected, .offline]
         var result: [UUID: StatusSquare.Level] = [:]
         for (index, host) in hosts.enumerated() {

@@ -107,11 +107,90 @@ breaks the instrument illusion.
 - Registration marks: 6pt corner brackets in `rule` marking the terminal viewport and any focused
   region. Two per region maximum (opposite corners), never four, which reads as a frame.
 - No shadows anywhere. Depth comes from the `panel` and `raised` layers.
+- The index column in regular width is 300 to 380pt, measured off the longest thing its row prints
+  (a tailnet hostname with its port). A row that will not fit its columns at that width **drops or
+  stacks them**; it never truncates every column equally, because that is not a narrow layout, it
+  is a wide layout that has stopped working.
+- Prose never sets wider than about 560pt, whatever the pane is. A drawing has a plate size.
 
 ## Components
 Every interactive element ships default, pressed, disabled, and focus. Status uses a 6pt square
 (filled `ok` when connected, hollow `rule` when offline, filled `warn` while connecting), never a
 circle, because squares belong to the drawing grammar and circles belong to iOS.
+
+## Navigation grammar
+
+The app has two shapes, chosen by **horizontal size class** and never by device idiom, because an
+iPad in a narrow Split View is a phone-shaped window and has to behave like one:
+
+| Width | Shape | The index is |
+|---|---|---|
+| compact | a pushed `NavigationStack` | a screen you go back to |
+| regular | a two-column `NavigationSplitView` | a column beside the terminal |
+
+### The header band
+Every screen that is not a bare sheet wears one band across its top: `panel` ground, a hairline
+along its bottom edge, and nothing else on it. It holds, in this order:
+
+1. the **leading cell** (below),
+2. the **title**, `title` face, uppercase, one line, truncating tail, with the **annotation line**
+   under it in `microLabel` stating what the screen currently holds,
+3. **measured columns** on the trailing end, when the screen has machine values to report.
+
+A screen with more room prints more columns rather than more space. A band with a hole in the
+middle of it is a narrow layout that has been stretched, which is the one thing a measured strip
+may not look like.
+
+### The back affordance: one form, one place
+**The control that moves you between screens is the band's leading cell.** A cell the full height
+of the band, `microLabel` face, `inkMuted` going to `inkBright` on press, the press lifting the
+cell to `raised`, divided from the rest of the band by a vertical hairline the way a plate is
+divided. Never a bordered box, because `[ ... ]` is this world's grammar for an **action on the
+content** (`SAVE`, `RECONNECT`, `+ HOST`) and going back is not that, it is structure. Never an SF
+Symbol chevron: this world draws its marks as glyphs on the mono grid.
+
+| Context | Label | Why |
+|---|---|---|
+| pushed screen, compact | `◀ BACK` | there is a screen behind this one |
+| split detail, regular | `◀ INDEX` / `▶ INDEX` | the index is *beside* this, so the cell shows and hides it; the mark points the way the press moves things |
+| root of a sheet | `CLOSE` | nothing is behind it, so it does not point anywhere |
+| the index itself, either shape | no cell | nothing is behind it |
+
+A screen never carries a second control that does what the leading cell already does. The
+terminal's closed band used to offer `[ INDEX ]` next to `[ RECONNECT ]`; it does not any more.
+
+### Collapsing the index
+A terminal is the one thing in this app that genuinely wants every pixel, so the index column can
+be given back to it. The `◀ INDEX` cell collapses it and `▶ INDEX` brings it back; the transition
+is a plain state change on the standard 180ms ease-out, never a bespoke choreography. Three rules
+hold it together:
+
+- The control lives in the **detail pane**, not in the column. A control inside the index goes
+  away with the index, and there is then no way back.
+- The choice is **remembered app-wide** (`settings.json`, alongside the key bar and the scroll
+  speed), because it is a decision about the screen you are holding rather than about any one
+  machine. Which means the app can open with the column collapsed and nothing selected, so the
+  detail placeholder carries the same cell.
+- Collapsing changes the terminal's width, which means a RESIZE to the daemon and a redraw at the
+  far end. Verify that against a real session, never by reasoning: `GEOM` in the header is written
+  only by the resize callback that sends the frame, so a `GEOM` that moved is the proof.
+
+### The disclosure mark
+A row that leads to another screen ends in `›` (U+203A) in `valueStrong`, `inkMuted`. A row that
+**selects** rather than pushes — a sidebar row in regular width, whose screen appears next to it
+rather than over it — carries no `›`. It is marked instead: a 2pt `accent` rule on its leading
+edge and a `raised` ground, the same pair focus uses, because in both cases the row is the one the
+screen is currently about.
+
+### What is a sheet and what is a screen
+- **Modal (sheet)**: a decision that must be finished or abandoned. Adding and editing a host, in
+  both shapes, because it ends in `SAVE` or `CANCEL`.
+- **Pushed screen**: a setting whose outcome is still owned by whatever opened it. Palette, font,
+  leader, security, key bar. Backing out abandons nothing.
+- **The detail pane** is the session, and only the session. App-wide settings are a push in
+  compact and a **sheet** in regular, never the detail pane: they change how the terminal behaves
+  under your thumb, so taking the terminal away to set them is exactly backwards, and closing
+  returns you to a session that never stopped.
 
 ## Motion
 150 to 200ms, ease-out, state only. One authored moment: the connect transition, where the

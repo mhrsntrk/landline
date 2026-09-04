@@ -24,11 +24,17 @@ final class ReplaySuppressionTests: XCTestCase {
         return (controller, { sent })
     }
 
-    func testResponsesAreDroppedWhileReplaying() {
-        let (controller, sent) = makeController(replay: 64)
-        XCTAssertTrue(controller.isReplaying)
-        controller.forwardResponse(Data("\u{1b}[?65;4;1;2;6;21;22;17;28c".utf8))
-        XCTAssertTrue(sent().isEmpty, "a replayed query was answered into the live prompt")
+    /// The whole rule, in one table. A response is produced synchronously
+    /// inside `feed`; a keypress never is, which is the only thing separating
+    /// them at the delegate.
+    func testOnlyAResponseGeneratedDuringReplayIsDropped() {
+        XCTAssertTrue(TerminalController.dropsOutbound(isReplaying: true, isParsing: true),
+                      "a replayed query must not be answered into the live prompt")
+        XCTAssertFalse(TerminalController.dropsOutbound(isReplaying: true, isParsing: false),
+                       "a keypress during replay is the user, not a replayed query")
+        XCTAssertFalse(TerminalController.dropsOutbound(isReplaying: false, isParsing: true),
+                       "a live query must be answered")
+        XCTAssertFalse(TerminalController.dropsOutbound(isReplaying: false, isParsing: false))
     }
 
     func testResponsesResumeOnceTheReplayIsConsumed() {
@@ -64,5 +70,27 @@ final class ReplaySuppressionTests: XCTestCase {
         controller.feed(Data("bbbb".utf8))
         controller.flushForTest()
         XCTAssertFalse(controller.isReplaying, "the counter must not wrap and re-arm suppression")
+    }
+}
+
+/// Suppressing replayed queries also swallowed anything the user typed during
+/// the replay, roughly 250ms on a full scrollback. The delegate sees a parser
+/// response and a keypress identically; the difference is that a response is
+/// produced synchronously inside `feed` and a keypress never is.
+final class ReplayInputTests: XCTestCase {
+    func testTypingDuringReplayStillReachesTheFarEnd() {
+        let controller = TerminalController()
+        controller.attach(to: TerminalView(frame: CGRect(x: 0, y: 0, width: 400, height: 300)))
+        var sent: [Data] = []
+        controller.onSend = { sent.append($0) }
+        controller.beginReplay(bytes: 4096)
+
+        XCTAssertTrue(controller.isReplaying)
+        controller.forwardResponse(Data("ls\n".utf8))
+
+        XCTAssertEqual(
+            sent.count, 1,
+            "a keypress during replay was dropped; the user is not a replayed query"
+        )
     }
 }

@@ -9,11 +9,11 @@ struct LandlineApp: App {
 
     var body: some Scene {
         WindowGroup {
-            NavigationStack {
-                HostListView()
-            }
-            .environment(hostStore)
-            .environment(settingsStore)
+            // `RootView` picks the stack or the split by horizontal size class.
+            // The stores are attached above it so neither shape re-creates them.
+            RootView()
+                .environment(hostStore)
+                .environment(settingsStore)
         }
     }
 }

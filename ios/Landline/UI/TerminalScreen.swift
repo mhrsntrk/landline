@@ -12,6 +12,10 @@ import UIKit
 
 struct TerminalScreen: View {
     let host: Host
+    /// Regular width: the index is a column *beside* this screen rather than a
+    /// screen behind it, so the header's leading cell shows and hides it
+    /// instead of popping a stack. Nil in compact width, where it goes back.
+    var indexColumn: Binding<NavigationSplitViewVisibility>?
 
     @Environment(HostStore.self) private var store
     @Environment(SettingsStore.self) private var settings
@@ -80,6 +84,11 @@ struct TerminalScreen: View {
     /// refuses to save but a hand-edited `hosts.json` can still contain.
     private var leaderByte: UInt8? { LeaderKey.byte(for: liveHost.leaderKey) }
 
+    /// The header band's laid-out width, which decides whether the session
+    /// column fits. Changes when the window resizes or the index column shows
+    /// and hides, which on an iPad is constantly.
+    @State private var headerWidth: CGFloat = 0
+
     /// Live point size. Held in state rather than read off `host` every time
     /// because the pinch gesture changes it mid-session and writes it back to
     /// the store; `host` is the copy this screen was pushed with and would go
@@ -105,7 +114,13 @@ struct TerminalScreen: View {
         .background(Theme.ground)
         .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
-        .onAppear { wireUpAndConnect() }
+        .onAppear {
+            wireUpAndConnect()
+            // After the representable has made its view. A hardware keyboard is
+            // the normal case on an iPad and this is a terminal, so the
+            // terminal has to be what a keystroke reaches.
+            DispatchQueue.main.async { controller.focus() }
+        }
         .onDisappear { connection.disconnect(sendDetach: true) }
         // A font or palette edit must reach the terminal the moment it is
         // saved, not on the next foregrounding.
@@ -135,6 +150,7 @@ struct TerminalScreen: View {
                 // app is in the background, which changes what this host's
                 // chosen family resolves to.
                 applyFont()
+                controller.focus()
                 if case .closed = state { reconnect() }
                 if case .idle = state { reconnect() }
             default:
@@ -165,7 +181,18 @@ struct TerminalScreen: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: Theme.Metric.grid * 2)
-                if let sessionShortID {
+                // The column that only exists on a wide band. On a phone the
+                // band is full and there is nowhere to put this; on an iPad's
+                // detail pane the same row has 500pt of nothing between the
+                // name and the readouts, and a measured strip with a hole in it
+                // is a phone layout that has been stretched. So the hole gets
+                // filled with the one fact the header never showed: which
+                // endpoint this session is actually attached to, which is also
+                // the fact you want when two machines are named alike.
+                if showsEndpointColumn {
+                    measured(label: "ENDPOINT", value: endpointLabel)
+                }
+                if let sessionShortID, showsSessionColumn {
                     measured(label: "SESS", value: sessionShortID)
                 }
                 measured(label: "GEOM", value: "\(cols)×\(rows)")
@@ -177,6 +204,12 @@ struct TerminalScreen: View {
         }
         .frame(height: Theme.Metric.hitTarget + Theme.Metric.grid * 2)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: HeaderWidthKey.self, value: proxy.size.width)
+            }
+        }
+        .onPreferenceChange(HeaderWidthKey.self) { headerWidth = $0 }
         .background(Theme.panel)
         .overlay(alignment: .bottom) { Hairline() }
         .overlay(alignment: .bottomLeading) {
@@ -193,18 +226,28 @@ struct TerminalScreen: View {
         }
     }
 
+    /// The one back affordance this app has (DESIGN.md, navigation grammar):
+    /// the leading cell of the header band. In a split view the same cell
+    /// carries the index column, because there the index is not behind this
+    /// screen, it is next to it.
     private var backControl: some View {
-        Button {
-            dismiss()
-        } label: {
-            Text("\u{25C0}")
-                .font(.llValue)
-                .frame(width: Theme.Metric.hitTarget)
-                .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
+        HeaderLeadingCell(kind: leadingKind) {
+            if let indexColumn {
+                withAnimation(Theme.Motion.state) {
+                    indexColumn.wrappedValue = indexIsShowing ? .detailOnly : .all
+                }
+            } else {
+                dismiss()
+            }
         }
-        .buttonStyle(BackCellStyle())
-        .accessibilityLabel(Text("back to the index"))
+    }
+
+    private var indexIsShowing: Bool {
+        indexColumn?.wrappedValue != .detailOnly
+    }
+
+    private var leadingKind: HeaderLeading {
+        indexColumn == nil ? .back : .index(showing: indexIsShowing)
     }
 
     /// A micro-caps label stacked over its value, the measured-column pattern.
@@ -223,6 +266,33 @@ struct TerminalScreen: View {
         }
         .llMeasuredColumn()
     }
+
+    /// Whether the band has the width to carry the session column as well as
+    /// the geometry and the age.
+    ///
+    /// The band is one row and it holds four things: the leading cell, the
+    /// machine's name, and three measured columns. On the narrowest phone this
+    /// app supports the four do not all fit at their honest widths, and the one
+    /// that loses is the name, which is the one thing on this screen that says
+    /// which machine you are typing at. So the least load-bearing column goes
+    /// instead: `SESS` is a four-glyph handle for matching a row in
+    /// `landlined sessions list`, which is a thing you do at a desk, not on a
+    /// train. `GEOM` and `AGE` both change while you watch and are kept.
+    private var showsSessionColumn: Bool {
+        headerWidth == 0 || headerWidth >= Self.sessionColumnFloor
+    }
+
+    /// Measured, not guessed: the leading cell, the three columns at their
+    /// laid-out widths and the gutters come to just over 320pt, and a name
+    /// column narrower than about 80pt stops being a name.
+    static let sessionColumnFloor: CGFloat = 400
+
+    /// Wide enough that the band has room the other columns are not using.
+    /// A full-width iPad pane and a landscape phone clear it; a portrait phone
+    /// and a narrow split never do.
+    private var showsEndpointColumn: Bool { headerWidth >= Self.endpointColumnFloor }
+
+    static let endpointColumnFloor: CGFloat = 700
 
     /// First four glyphs of the session id: enough to match a row in
     /// `landlined sessions list`, and the label is kept to four characters
@@ -354,11 +424,14 @@ struct TerminalScreen: View {
             Text(recoveryText(for: reason))
                 .llProse(Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)
+            // One action, not two. The way back to the index is the header's
+            // leading cell, on this screen and on every other screen in the app
+            // (DESIGN.md, navigation grammar); a second control that did the
+            // same thing in a different shape is exactly the drift this band
+            // used to carry.
             HStack(spacing: Theme.Metric.grid * 3) {
                 Button("RECONNECT") { reconnect() }
                     .buttonStyle(InstrumentButtonStyle(emphasis: .primary))
-                Button("INDEX") { dismiss() }
-                    .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
                 Spacer(minLength: 0)
             }
         }
@@ -602,17 +675,16 @@ struct TerminalScreen: View {
     }
 }
 
-// MARK: - Back cell
+// MARK: - Header measurement
 
-/// The header's leading cell. Pressed goes to `raised`, and a full hairline
-/// separates it from the identity block, the way a plate is divided.
-private struct BackCellStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(configuration.isPressed ? Theme.inkBright : Theme.inkMuted)
-            .background(configuration.isPressed ? Theme.raised : Color.clear)
-            .overlay(alignment: .trailing) { VerticalHairline() }
-            .animation(Theme.Motion.state, value: configuration.isPressed)
+/// The header band's width, reported by the band itself. Used to decide
+/// whether the session column fits, which changes with the window and with the
+/// index column rather than with the device.
+private struct HeaderWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 

@@ -22,6 +22,9 @@ struct SettingScreen<Content: View>: View {
     /// The current value, echoing the summary row that opened this screen so
     /// the push reads as one continuous thought.
     let annotation: String
+    /// What the header band's leading cell does here. A push goes back; the
+    /// root of a sheet has nothing behind it and closes instead.
+    var leading: HeaderLeading = .back
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -39,7 +42,7 @@ struct SettingScreen<Content: View>: View {
         .background(Theme.panel)
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .top, spacing: 0) {
-            SettingHeader(title: title, annotation: annotation)
+            SettingHeader(title: title, annotation: annotation, leading: leading)
         }
         .toolbar(.hidden, for: .navigationBar)
     }
@@ -51,27 +54,38 @@ struct SettingScreen<Content: View>: View {
 struct SettingHeader: View {
     let title: String
     let annotation: String
+    /// See `SettingScreen.leading`.
+    var leading: HeaderLeading = .back
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .lastTextBaseline, spacing: Theme.Metric.grid * 2) {
+        // The leading cell, then the title block, which is the one header shape
+        // in the app (DESIGN.md, navigation grammar). This screen used to put a
+        // bordered `[ ◀ BACK ]` on the trailing end, which put the app's back
+        // control in two different places wearing two different clothes
+        // depending on which screen you were on.
+        HStack(spacing: 0) {
+            HeaderLeadingCell(kind: leading) { dismiss() }
+            VStack(alignment: .leading, spacing: 0) {
                 Text(title)
                     .llTitle()
                     .lineLimit(1)
-                Spacer(minLength: Theme.Metric.grid * 2)
-                Button("\u{25C0} BACK") { dismiss() }
-                    .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
+                MicroLabel(annotation)
+                    .padding(.top, Theme.Metric.grid * 2)
+                    .llMeasuredColumn()
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            MicroLabel(annotation)
-                .padding(.top, Theme.Metric.grid * 2)
-                .llMeasuredColumn()
-                .lineLimit(1)
-                .truncationMode(.middle)
+            .padding(.horizontal, Theme.Metric.gutter)
+            .padding(.vertical, Theme.Metric.grid * 3)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, Theme.Metric.gutter)
-        .padding(.vertical, Theme.Metric.grid * 3)
+        // The leading cell asks for `maxHeight: .infinity` so it fills whatever
+        // band it is put in. Without this the band has no height of its own to
+        // fill and takes the whole screen, which is a header that ate its own
+        // screen. The title block's ideal height is the band's height.
+        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.panel)
         .overlay(alignment: .bottom) { Hairline() }

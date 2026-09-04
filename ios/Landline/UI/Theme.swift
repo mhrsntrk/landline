@@ -403,29 +403,37 @@ struct MicroLabel: View {
 
 /// A full-bleed row that presses into the `raised` layer.
 struct InstrumentRowButtonStyle: ButtonStyle {
+    /// The row this screen is currently showing, in a split view where the row
+    /// stays on screen beside its own content. Distinct from focus, which is a
+    /// keyboard position and can sit on a row that is not the selected one.
+    var selected: Bool = false
+
     func makeBody(configuration: Configuration) -> some View {
-        StatefulBody(configuration: configuration)
+        StatefulBody(configuration: configuration, selected: selected)
     }
 
     private struct StatefulBody: View {
         let configuration: ButtonStyleConfiguration
+        let selected: Bool
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.isFocused) private var isFocused
 
         var body: some View {
             configuration.label
                 .opacity(isEnabled ? 1 : 0.4)
-                .background(configuration.isPressed ? Theme.raised : Color.clear)
+                .background(configuration.isPressed || selected ? Theme.raised : Color.clear)
                 .overlay(alignment: .leading) {
-                    // Focus reads as an accent rule on the leading edge, not a
-                    // glowing rounded rectangle.
+                    // Selection and focus both read as an accent rule on the
+                    // leading edge, not as a glowing rounded rectangle and never
+                    // as a checkmark.
                     Rectangle()
                         .fill(Theme.accent)
                         .frame(width: 2)
-                        .opacity(isFocused ? 1 : 0)
+                        .opacity(isFocused || selected ? 1 : 0)
                 }
                 .animation(Theme.Motion.state, value: configuration.isPressed)
                 .animation(Theme.Motion.state, value: isFocused)
+                .animation(Theme.Motion.state, value: selected)
                 .contentShape(Rectangle())
         }
     }
@@ -530,6 +538,94 @@ struct InstrumentToggle: View {
                 Rectangle().strokeBorder(Theme.rule, lineWidth: 0.5)
             }
             .animation(Theme.Motion.state, value: active)
+    }
+}
+
+// MARK: - Navigation grammar (DESIGN.md)
+//
+// One back affordance, in one place: the leading cell of a header band. A
+// bordered `[ ... ]` control is this world's grammar for an *action on the
+// content* — SAVE, RECONNECT, + HOST — and moving between screens is not that,
+// it is structure. So the control that moves you is drawn as a division of the
+// band itself: a cell on the leading edge, separated from what the screen is
+// about by a vertical hairline, exactly the way a plate is divided.
+//
+// The same cell carries the split view. In regular width the index is not
+// behind the terminal, it is beside it, so the cell shows and hides the column
+// rather than popping a stack, and it says so.
+
+/// What the leading cell of a header band does on this screen.
+enum HeaderLeading: Equatable {
+    /// Nothing is behind this screen, and no cell is drawn. The index in
+    /// compact width, and the sidebar in regular width.
+    case root
+    /// Compact width: pop to the screen behind this one.
+    case back
+    /// The root of a sheet. Nothing is behind it, so it does not point
+    /// anywhere: it simply stops.
+    case close
+    /// Regular width: the index column, and whether it is currently showing.
+    case index(showing: Bool)
+
+    /// The cell's label, or nil when no cell is drawn. `\u{25C0}` and
+    /// `\u{25B6}` are the marks, never an SF Symbol chevron: this world draws
+    /// its marks as glyphs on the mono grid.
+    var label: String? {
+        switch self {
+        case .root: return nil
+        case .back: return "\u{25C0} BACK"
+        case .close: return "CLOSE"
+        // The mark points the way the press moves things: showing collapses the
+        // column leftward, hidden pushes the content rightward to reveal it.
+        case .index(let showing): return showing ? "\u{25C0} INDEX" : "\u{25B6} INDEX"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .root: return ""
+        case .back: return "back"
+        case .close: return "close"
+        case .index(let showing): return showing ? "hide the index" : "show the index"
+        }
+    }
+}
+
+/// The header band's leading cell. Full band height, hairline-divided,
+/// `inkMuted` going to `inkBright` on a press that also lifts the cell to
+/// `raised`.
+struct HeaderLeadingCell: View {
+    let kind: HeaderLeading
+    let action: () -> Void
+
+    var body: some View {
+        if let label = kind.label {
+            Button(action: action) {
+                Text(label)
+                    .font(.llMicroLabel)
+                    .tracking(0.8)
+                    .lineLimit(1)
+                    // Fixed furniture: the cell may not reflow, or the band's
+                    // leading edge stops lining up with the gutter below it.
+                    .dynamicTypeSize(...DynamicTypeSize.large)
+                    .padding(.horizontal, Theme.Metric.grid * 3)
+                    .frame(minWidth: Theme.Metric.hitTarget)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(HeaderCellStyle())
+            .accessibilityLabel(Text(kind.accessibilityLabel))
+        }
+    }
+}
+
+private struct HeaderCellStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(configuration.isPressed ? Theme.inkBright : Theme.inkMuted)
+            .background(configuration.isPressed ? Theme.raised : Color.clear)
+            .overlay(alignment: .trailing) { VerticalHairline() }
+            .animation(Theme.Motion.state, value: configuration.isPressed)
     }
 }
 

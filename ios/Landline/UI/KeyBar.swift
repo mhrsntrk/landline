@@ -42,6 +42,16 @@ struct KeyBar: View {
     /// not do (DESIGN.md components; Apple's 44pt).
     private static let height: CGFloat = Theme.Metric.hitTarget
     private static let minKeyWidth: CGFloat = Theme.Metric.hitTarget
+    /// And a ceiling, for the iPad.
+    ///
+    /// The bar is a keypad, and a keypad's cells are the size of the thing that
+    /// presses them. Spreading thirteen keys evenly across a 1000pt pane makes
+    /// each one a 77pt slab holding three glyphs, which stops reading as keys
+    /// and starts reading as a toolbar with the labels lost in the middle of it.
+    /// Twice the touch minimum is the widest a cell can be and still look like a
+    /// key. Past that the row keeps its size and sits against the leading edge,
+    /// where the thumb of a hand holding the left side of an iPad already is.
+    private static let maxKeyWidth: CGFloat = Theme.Metric.hitTarget * 2
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,8 +64,21 @@ struct KeyBar: View {
                             if index > 0 { separator }
                             cell(key).frame(width: width)
                         }
+                        // The bar has hit its ceiling and there is sheet left
+                        // over, so the cell rhythm carries on across it as empty
+                        // slots. Exactly what the index does below its last host
+                        // and for the same reason: a ledger does not stop ruling
+                        // when the entries run out, and a row that simply stops
+                        // two thirds of the way across reads as a phone layout
+                        // that was stretched and gave up.
+                        ForEach(Array(0..<emptySlots(available: proxy.size.width, width: width)),
+                                id: \.self) { _ in
+                            separator
+                            Color.clear.frame(width: width)
+                        }
                     }
                     .frame(height: Self.height)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .scrollIndicators(.hidden)
                 // No rubber band when the row already fits, so the bar reads as
@@ -77,12 +100,32 @@ struct KeyBar: View {
     }
 
     /// Fill the width evenly while the row fits; stop at the touch minimum and
-    /// let it scroll once it does not.
+    /// let it scroll once it does not; stop again at the key ceiling so a wide
+    /// pane does not turn the keypad into a toolbar.
     private func keyWidth(available: CGFloat) -> CGFloat {
+        min(Self.maxKeyWidth, unclampedWidth(available: available))
+    }
+
+    /// The even share, floored at the touch minimum but not capped. Kept apart
+    /// so the bar can tell "the row is filling the width" from "the row has hit
+    /// its ceiling and there is sheet left over".
+    private func unclampedWidth(available: CGFloat) -> CGFloat {
         guard !keys.isEmpty, available > 0 else { return Self.minKeyWidth }
         let separators = CGFloat(keys.count - 1) / displayScale
         let even = (available - separators) / CGFloat(keys.count)
         return max(Self.minKeyWidth, even.rounded(.down))
+    }
+
+    /// How many empty cells the ruling carries on for once the keys have hit
+    /// their ceiling. Zero whenever the row already fills the width, which is
+    /// every phone and most iPad panes, so this costs nothing there.
+    private func emptySlots(available: CGFloat, width: CGFloat) -> Int {
+        guard !keys.isEmpty, available > 0 else { return 0 }
+        let pitch = width + 1 / displayScale
+        let used = CGFloat(keys.count) * width + CGFloat(keys.count - 1) / displayScale
+        let spare = available - used
+        guard spare > pitch else { return 0 }
+        return Int(spare / pitch)
     }
 
     private var separator: some View {

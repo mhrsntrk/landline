@@ -805,12 +805,31 @@ final class TerminalController {
 
     var isReplaying: Bool { replayRemaining > 0 }
 
+    /// True only while SwiftTerm's parser is running inside `feed`.
+    ///
+    /// The delegate cannot tell a parser response from a keypress: both arrive
+    /// as `send(source:data:)`. But a response is produced *synchronously
+    /// during* a feed and a keypress never is, so the call stack is the
+    /// distinction. Without this, suppressing replayed queries also swallowed
+    /// anything typed during the replay, which is about 250ms on a full
+    /// scrollback.
+    private var isParsing = false
+
     /// A response SwiftTerm produced while parsing. Dropped while replaying,
     /// forwarded otherwise. Lives here rather than in the delegate so the rule
     /// is testable without standing up a view and its delegate chain.
     func forwardResponse(_ data: Data) {
-        guard !isReplaying else { return }
+        guard !Self.dropsOutbound(isReplaying: isReplaying, isParsing: isParsing) else { return }
         onSend?(data)
+    }
+
+    /// The rule, as a pure function so it can be asserted without standing up
+    /// a view, a delegate chain and a parser that emits a real response.
+    ///
+    /// Drop only a response generated *while* replaying. A keypress during a
+    /// replay is the user, and must reach the far end.
+    static func dropsOutbound(isReplaying: Bool, isParsing: Bool) -> Bool {
+        isReplaying && isParsing
     }
 
     /// Called when ATTACHED lands, before any replayed STDOUT is fed.
@@ -885,6 +904,20 @@ final class TerminalController {
         if measuring { probe.start() }
     }
 
+    /// Put the keyboard back on the terminal.
+    ///
+    /// A hardware keyboard types into whatever is first responder, and on an
+    /// iPad this screen shares its window with a sidebar the user is tapping.
+    /// SwiftTerm takes first responder on a tap of its own view, but nothing
+    /// gives it back after a tap somewhere else, so the screen asserts it when
+    /// it appears and when the app returns to the foreground. Idempotent: it
+    /// does nothing when the terminal already holds it, so it cannot dismiss and
+    /// re-present the software keyboard underneath a typing thumb.
+    func focus() {
+        guard let terminalView, !terminalView.isFirstResponder else { return }
+        _ = terminalView.becomeFirstResponder()
+    }
+
     func detach() {
         probe.stop()
         stopLink()
@@ -922,7 +955,9 @@ final class TerminalController {
     private func legacyFeed(_ data: Data) {
         guard let view = terminalView else { return }
         let started = CACurrentMediaTime()
+        isParsing = true
         view.feed(byteArray: [UInt8](data)[...])
+        isParsing = false
         if replayRemaining > 0 {
             replayRemaining = max(0, replayRemaining - data.count)
         }
@@ -1017,7 +1052,9 @@ final class TerminalController {
 
             let sliceStart = CACurrentMediaTime()
             // ArraySlice: no copy, and SwiftTerm's parser reads it in place.
+            isParsing = true
             view.feed(byteArray: pending[pendingHead..<end])
+            isParsing = false
             if replayRemaining > 0 {
                 replayRemaining -= (end - pendingHead)
             }

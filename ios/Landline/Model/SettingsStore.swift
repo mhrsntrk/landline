@@ -87,13 +87,24 @@ enum TerminalScrollSpeed: Int, CaseIterable, Codable, Identifiable, Hashable {
 struct SettingsDocument: Codable, Equatable {
     var app: AppSettings
     var scrollSpeed: TerminalScrollSpeed
+    /// Whether the index column shows beside the terminal in regular width.
+    ///
+    /// App-wide rather than per host, and for the same reason the key bar is:
+    /// it is a decision about how much of this screen you want the terminal to
+    /// have, which is a property of the screen you are holding, not of the
+    /// machine at the other end. Meaningless in compact width, where there is
+    /// no column, and never read there.
+    var showsIndexColumn: Bool
 
-    init(app: AppSettings = AppSettings(), scrollSpeed: TerminalScrollSpeed = .default) {
+    init(app: AppSettings = AppSettings(),
+         scrollSpeed: TerminalScrollSpeed = .default,
+         showsIndexColumn: Bool = true) {
         self.app = app
         self.scrollSpeed = scrollSpeed
+        self.showsIndexColumn = showsIndexColumn
     }
 
-    private enum CodingKeys: String, CodingKey { case scrollSpeed }
+    private enum CodingKeys: String, CodingKey { case scrollSpeed, showsIndexColumn }
 
     init(from decoder: any Decoder) throws {
         app = try AppSettings(from: decoder)
@@ -103,12 +114,18 @@ struct SettingsDocument: Codable, Equatable {
         // newer one can cost the user their key bar.
         scrollSpeed = try container.decodeIfPresent(TerminalScrollSpeed.self, forKey: .scrollSpeed)
             ?? .default
+        // A file that predates the split view has no opinion, and the honest
+        // default is the column showing: a first run must not open on a screen
+        // with the index hidden and nothing selected.
+        showsIndexColumn = try container.decodeIfPresent(Bool.self, forKey: .showsIndexColumn)
+            ?? true
     }
 
     func encode(to encoder: any Encoder) throws {
         try app.encode(to: encoder)
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(scrollSpeed, forKey: .scrollSpeed)
+        try container.encode(showsIndexColumn, forKey: .showsIndexColumn)
     }
 
     static func decode(from data: Data) throws -> SettingsDocument {
@@ -133,6 +150,9 @@ final class SettingsStore {
     /// How far a swipe over the terminal scrolls. App-wide, like the key bar:
     /// it is a property of the thumb, not of the machine at the far end.
     private(set) var scrollSpeed: TerminalScrollSpeed
+    /// Whether the index column shows beside the terminal. See
+    /// `SettingsDocument.showsIndexColumn`.
+    private(set) var showsIndexColumn: Bool
 
     private let fileURL: URL
 
@@ -145,6 +165,7 @@ final class SettingsStore {
             ?? SettingsDocument()
         settings = document.app
         scrollSpeed = document.scrollSpeed
+        showsIndexColumn = document.showsIndexColumn
         settings.keyBar = Self.demoKeyBar ?? settings.keyBar
     }
 
@@ -236,10 +257,24 @@ final class SettingsStore {
 
     var isDefaultScrollSpeed: Bool { scrollSpeed == .default }
 
+    // MARK: - Index column
+
+    /// Remember whether the index is showing beside the terminal. Someone who
+    /// collapsed it to give the terminal the whole screen wants it collapsed
+    /// the next time as well, so this is written through rather than held for
+    /// the launch.
+    func setShowsIndexColumn(_ shows: Bool) {
+        guard shows != showsIndexColumn else { return }
+        showsIndexColumn = shows
+        save()
+    }
+
     // MARK: - Persistence
 
     private func save() {
-        let document = SettingsDocument(app: settings, scrollSpeed: scrollSpeed)
+        let document = SettingsDocument(app: settings,
+                                        scrollSpeed: scrollSpeed,
+                                        showsIndexColumn: showsIndexColumn)
         guard let data = try? SettingsDocument.encode(document) else { return }
         try? data.write(to: fileURL, options: .atomic)
     }
