@@ -11,10 +11,12 @@ import SwiftUI
 
 /// The app's first app-wide settings screen.
 ///
-/// One row today. It exists as a level anyway because the distinction it draws
-/// is the one the user has to hold: what belongs to a machine (palette, font,
-/// tmux leader) is edited on the machine, and what belongs to the thumb is
-/// edited once, here.
+/// It exists as a level because the distinction it draws is the one the user has
+/// to hold: what belongs to a machine (palette, font, tmux leader) is edited on
+/// the machine, and what belongs to the thumb is edited once, here. Both
+/// settings on it are thumb settings, and both are shown as what they produce
+/// rather than described: the key bar draws itself, and the scroll speed states
+/// the travel one notch costs.
 struct SettingsView: View {
     @Environment(SettingsStore.self) private var settings
 
@@ -51,6 +53,10 @@ struct SettingsView: View {
                     .padding(.horizontal, -Theme.Metric.gutter)
             }
             .padding(.top, Theme.Metric.grid * 4)
+            .padding(.bottom, Theme.Metric.grid * 6)
+
+            Hairline()
+            scrollSpeed
         }
         .navigationDestination(item: $route) { _ in KeyBarSettingsView() }
         .task { if DemoSeed.opensKeyBar { route = .keyBar } }
@@ -63,6 +69,66 @@ struct SettingsView: View {
 
     private var layoutNote: String? {
         settings.isDefaultKeyBar ? "DEFAULT" : "CUSTOM"
+    }
+
+    // MARK: Scroll speed
+    //
+    // Five steps on one line, not a slider and not a screen of its own. A slider
+    // sets a number nobody can predict the feel of, and a second level would put
+    // a tap between the setting and the swipe that judges it. Set it, leave,
+    // swipe, come back: the change is live on the next gesture.
+
+    private var scrollSpeed: some View {
+        VStack(alignment: .leading, spacing: Theme.Metric.grid * 3) {
+            HStack(spacing: Theme.Metric.grid * 2) {
+                MicroLabel("SCROLL SPEED")
+                Spacer(minLength: Theme.Metric.grid * 2)
+                Text(settings.scrollSpeed.label)
+                    .llValue(Theme.inkBright)
+                if let note = settings.scrollSpeed.endpointNote {
+                    MicroLabel(note).llMeasuredColumn()
+                }
+            }
+
+            HStack(spacing: Theme.Metric.grid * 2) {
+                ForEach(TerminalScrollSpeed.allCases) { step in
+                    speedCell(step)
+                }
+            }
+
+            // The setting stated as the measurement it is, on the tick scale's
+            // own terms: one notch per so many lines of finger travel.
+            MicroLabel(settings.scrollSpeed.travelNote)
+
+            proseText("A swipe over the terminal sends wheel notches to whatever is running there, and a higher setting sends more of them for the same travel. This is the setting for tmux, `less` and anything else reading the mouse. A plain shell scrolls its own scrollback and ignores it.")
+                .llProse()
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, Theme.Metric.grid * 4)
+        .padding(.bottom, Theme.Metric.grid * 4)
+    }
+
+    private func speedCell(_ step: TerminalScrollSpeed) -> some View {
+        let selected = settings.scrollSpeed == step
+        return Button {
+            withAnimation(Theme.Motion.state) { settings.setScrollSpeed(step) }
+        } label: {
+            Text(step.label)
+                .font(.llValue)
+                .foregroundStyle(selected ? Theme.inkBright : Theme.ink)
+                .frame(maxWidth: .infinity)
+                .frame(height: Theme.Metric.hitTarget)
+                .background(selected ? Theme.raised : Color.clear)
+                .overlay {
+                    Rectangle().strokeBorder(selected ? Theme.accent : Theme.rule,
+                                             lineWidth: selected ? 1 : 0.5)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("scroll speed \(step.label)"))
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
 

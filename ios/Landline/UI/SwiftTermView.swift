@@ -357,50 +357,72 @@ final class FrameProbe {
 /// clamp are the three things that decide whether a swipe reads as scrolling or
 /// as a lurch, and all three are testable without a device.
 struct WheelScrollAccumulator: Equatable {
-    /// How many lines one wheel notch moves at the far end. Three is xterm's
-    /// convention and tmux, vim and less all inherit it, so charging one notch
-    /// per three cell heights of travel lands the text roughly where the finger
-    /// left it. That is what "feels like a normal scroll view" means here: the
-    /// ratio is derived from the cell height rather than from a magic constant,
-    /// so a 9pt font scrolls the same distance per swipe as a 22pt one.
-    static let linesPerNotch = 3
+    /// The most travel one callback may charge, in cell heights.
+    ///
+    /// A pan callback is normally one frame's worth of finger, which is a few
+    /// points. It stops being that the moment the main thread is busy — and it
+    /// is busy exactly while this is scrolling, because every notch makes tmux
+    /// repaint the pane — so callbacks coalesce and arrive carrying three or
+    /// four frames of travel at once. The ceiling smooths that burst over the
+    /// following callbacks instead of putting a hundred wheel events on the wire
+    /// in one frame.
+    ///
+    /// Twelve cell heights is a third of a phone screen per callback, or about
+    /// forty screens a second: far past any thumb, so this never limits real
+    /// input. It is also exactly the old constant, which was four notches at
+    /// three cell heights each, so the shape of the clamp is unchanged and only
+    /// the fate of the overflow is.
+    static let maxCellHeightsPerStep: CGFloat = 12
 
-    /// The most notches one callback may charge. A fast flick arrives as a
-    /// single large translation, and without a ceiling that one callback puts
-    /// hundreds of wheel events on the wire in one frame, which the far end then
-    /// chews through for seconds after the finger has stopped. Four notches is
-    /// twelve lines, about half a phone screen.
-    static let maxNotchesPerStep = 4
+    /// The most travel that may sit unpaid, in cell heights. Roughly three
+    /// screens: more than any single swipe can produce, so nothing a finger
+    /// actually did is ever discarded, and still a hard bound so a burst cannot
+    /// become a queue that scrolls on after the gesture visibly ended.
+    static let maxCarryCellHeights: CGFloat = 120
 
     /// Points of travel one notch costs.
     let pointsPerNotch: CGFloat
+    /// The ceiling, resolved into notches at this speed. Derived rather than
+    /// constant: the ceiling is a *travel* limit, so raising the speed has to
+    /// raise the notch count it permits or the fast settings would spend every
+    /// callback clamped and pay the rest out late, which is the runaway the
+    /// ceiling exists to prevent.
+    let maxNotchesPerStep: Int
+    /// The carry bound in points, from the cell height this was built with.
+    let maxCarry: CGFloat
     /// Travel not yet paid out as a whole notch. A swipe is a hundred small
     /// callbacks, most of them worth less than one notch, so the remainder has
     /// to survive between them or a slow drag scrolls nothing at all.
     private(set) var carry: CGFloat = 0
 
     /// A zero or absurd cell height would divide by nothing; 1pt is the floor.
-    init(cellHeight: CGFloat) {
-        pointsPerNotch = max(1, cellHeight) * CGFloat(Self.linesPerNotch)
+    init(cellHeight: CGFloat, speed: TerminalScrollSpeed = .default) {
+        let height = max(1, cellHeight)
+        pointsPerNotch = max(1, height * speed.cellHeightsPerNotch)
+        maxNotchesPerStep = max(1, Int(height * Self.maxCellHeightsPerStep / pointsPerNotch))
+        maxCarry = height * Self.maxCarryCellHeights
     }
 
     /// Positive `delta` is the finger travelling *down* the screen, which
     /// reveals earlier output, which is a wheel notch **up**. Returns a signed
     /// notch count: positive up, negative down, zero when nothing is owed yet.
+    ///
+    /// What the ceiling refuses is **kept**, not dropped. Dropping it was the
+    /// bug: a quick flick arrives as a handful of large callbacks, and charging
+    /// four notches for each and binning the rest threw most of the finger's
+    /// travel away, which is why a fast swipe moved barely further than a slow
+    /// one. The unpaid remainder stays in `carry` and is spent on the callbacks
+    /// that follow, bounded by `maxCarry` so it can never outlive the gesture by
+    /// more than a few frames.
     mutating func notches(forTranslation delta: CGFloat) -> Int {
         guard delta.isFinite else { return 0 }
-        carry += delta
+        carry = min(max(carry + delta, -maxCarry), maxCarry)
         var notches = Int((carry / pointsPerNotch).rounded(.towardZero))
         guard notches != 0 else { return 0 }
-        carry -= CGFloat(notches) * pointsPerNotch
-        if abs(notches) > Self.maxNotchesPerStep {
-            notches = notches < 0 ? -Self.maxNotchesPerStep : Self.maxNotchesPerStep
-            // The overflow is dropped rather than paid out over the following
-            // frames. A flick should stop when the flick stops; a queue that
-            // keeps firing after the finger has gone reads as the terminal
-            // running away.
-            carry = 0
+        if abs(notches) > maxNotchesPerStep {
+            notches = notches < 0 ? -maxNotchesPerStep : maxNotchesPerStep
         }
+        carry -= CGFloat(notches) * pointsPerNotch
         return notches
     }
 
@@ -424,21 +446,45 @@ struct FlickDecay: Equatable {
     /// past this the notch ceiling is doing all the work anyway.
     static let maxSpeed: CGFloat = 6000
 
-    private(set) var velocity: CGFloat
+    /// The coast's budget, in notches rather than in points.
+    ///
+    /// Friction alone bounds the coast in *travel*, and travel is what the
+    /// speed setting divides: at 5x the same flick buys five times the notches,
+    /// which is a flick that pages most of the way through a build log. A notch
+    /// is a fixed amount of movement at the far end (three lines under xterm's
+    /// convention, five under the owner's tmux binding), so the honest place to
+    /// bound a runaway is here, in notches. Sixty is roughly four screens at
+    /// three lines and seven at five. At 1x the friction curve settles at about
+    /// thirty-five notches on its own, so the budget never fires there; it
+    /// exists for the top of the range.
+    static let maxCoastNotches = 60
 
-    init(velocity: CGFloat) {
+    private(set) var velocity: CGFloat
+    /// Points of coast still allowed. Unlimited unless the caller gives a
+    /// budget, so the friction curve on its own stays testable.
+    private(set) var remainingTravel: CGFloat
+
+    init(velocity: CGFloat, maxTravel: CGFloat = .greatestFiniteMagnitude) {
         let finite = velocity.isFinite ? velocity : 0
         self.velocity = min(max(finite, -Self.maxSpeed), Self.maxSpeed)
         if abs(self.velocity) < Self.stopSpeed { self.velocity = 0 }
+        remainingTravel = maxTravel.isFinite ? max(0, maxTravel) : .greatestFiniteMagnitude
     }
 
-    var isCoasting: Bool { velocity != 0 }
+    var isCoasting: Bool { velocity != 0 && remainingTravel > 0 }
 
     /// Advances by `dt` seconds and answers with the distance travelled, in
     /// points, for the accumulator to charge.
     mutating func step(dt: CGFloat) -> CGFloat {
         guard isCoasting, dt > 0, dt.isFinite else { return 0 }
-        let distance = velocity * dt
+        var distance = velocity * dt
+        if abs(distance) >= remainingTravel {
+            distance = velocity < 0 ? -remainingTravel : remainingTravel
+            remainingTravel = 0
+            velocity = 0
+            return distance
+        }
+        remainingTravel -= abs(distance)
         velocity *= pow(Self.frictionPerFrame, dt * 60)
         if abs(velocity) < Self.stopSpeed { velocity = 0 }
         return distance
@@ -478,11 +524,25 @@ struct FlickDecay: Equatable {
 /// `allowMouseReporting` is deliberately left `true`: turning it off would fix
 /// the swipe by breaking tmux pane and window clicking, which is worth keeping.
 ///
+/// It also puts the keyboard away once a swipe starts reading history, which is
+/// the other half of making a phone usable for looking at output. See
+/// `dismissKeyboard`.
+///
 /// Main thread only, like `TerminalController`: UIKit gestures and the display
 /// link both arrive there and nothing else touches this.
 final class TerminalSwipeScroller: NSObject, UIGestureRecognizerDelegate {
     private weak var view: TerminalView?
     private var pan: UIPanGestureRecognizer?
+
+    /// The app-wide scroll speed, asked for rather than handed over.
+    ///
+    /// Called at the start of every gesture, so changing the setting is live on
+    /// the very next swipe rather than on the next time the terminal is opened.
+    /// A closure rather than a stored value because this object outlives any one
+    /// SwiftUI update and must not hold a stale copy; a closure rather than a
+    /// reference to the store because a gesture has no business knowing what a
+    /// settings file is.
+    var speed: () -> TerminalScrollSpeed = { .default }
 
     private var accumulator = WheelScrollAccumulator(cellHeight: 1)
     /// Where the wheel is reported from. Frozen at lift-off, so the coast keeps
@@ -492,6 +552,10 @@ final class TerminalSwipeScroller: NSObject, UIGestureRecognizerDelegate {
     private var decay: FlickDecay?
     private var coastLink: CADisplayLink?
     private var lastCoastTime: CFTimeInterval = 0
+
+    /// Whether this gesture has already put the keyboard away, so one long
+    /// swipe resigns once rather than on every callback.
+    private var didDismissKeyboard = false
 
     func attach(to view: TerminalView) {
         detach()
@@ -521,15 +585,19 @@ final class TerminalSwipeScroller: NSObject, UIGestureRecognizerDelegate {
         switch gesture.state {
         case .began:
             stopCoasting()
-            accumulator = WheelScrollAccumulator(cellHeight: Self.cellHeight(of: view))
+            accumulator = WheelScrollAccumulator(cellHeight: Self.cellHeight(of: view),
+                                                 speed: speed())
             reportPoint = gesture.location(in: view)
+            didDismissKeyboard = false
         case .changed:
             let translation = gesture.translation(in: view)
             // Reset every callback so `translation` is a delta rather than the
             // total; the accumulator carries the remainder itself.
             gesture.setTranslation(.zero, in: view)
             reportPoint = gesture.location(in: view)
-            emit(accumulator.notches(forTranslation: translation.y))
+            let notches = accumulator.notches(forTranslation: translation.y)
+            if notches > 0 { dismissKeyboard() }
+            emit(notches)
         case .ended:
             startCoasting(velocity: gesture.velocity(in: view).y)
         case .cancelled, .failed:
@@ -572,10 +640,43 @@ final class TerminalSwipeScroller: NSObject, UIGestureRecognizerDelegate {
         return true
     }
 
+    // MARK: Keyboard
+
+    /// Puts the keyboard away the first time a swipe actually scrolls back into
+    /// history.
+    ///
+    /// The keyboard eats over half a phone screen, and the moment the finger
+    /// starts scrolling the user is reading, not typing. Three deliberate
+    /// boundaries, all of them about not taking a decision the user did not
+    /// make:
+    ///
+    ///   * **On a scroll, not on a touch.** This is only reached once the
+    ///     accumulator has charged a whole notch, so a tap, a long press and a
+    ///     sub-notch nudge all leave the keyboard alone.
+    ///   * **On the backward direction only.** A positive notch count is the
+    ///     finger travelling down, which is scrolling *up* into history: reading
+    ///     old output, unambiguously. Swiping the other way is the recovery from
+    ///     an overshoot and often ends back at the prompt with something still
+    ///     to type, so it is left alone. In practice this costs nothing, because
+    ///     you cannot scroll forward before you have scrolled back.
+    ///   * **`resignFirstResponder`, and nothing else.** No window frames, no
+    ///     `endEditing` broadcast. SwiftTerm's own single tap calls
+    ///     `becomeFirstResponder` whenever it is not the first responder, so a
+    ///     tap anywhere on the terminal brings the keyboard straight back, and
+    ///     that is the whole undo.
+    private func dismissKeyboard() {
+        guard !didDismissKeyboard, let view, view.isFirstResponder else { return }
+        didDismissKeyboard = true
+        _ = view.resignFirstResponder()
+    }
+
     // MARK: Coasting
 
     private func startCoasting(velocity: CGFloat) {
-        let decay = FlickDecay(velocity: velocity)
+        // The budget is stated in notches and spent in points, so it means the
+        // same amount of text at every speed setting.
+        let budget = accumulator.pointsPerNotch * CGFloat(FlickDecay.maxCoastNotches)
+        let decay = FlickDecay(velocity: velocity, maxTravel: budget)
         guard decay.isCoasting else { return }
         self.decay = decay
         lastCoastTime = CACurrentMediaTime()
@@ -1617,6 +1718,13 @@ struct SwiftTermView: UIViewRepresentable {
     /// concrete point size and never the 0 sentinel.
     let fontSize: CGFloat
 
+    /// The app-wide settings, for the scroll speed the swipe gesture charges at.
+    /// Optional so a preview or a test can hold this view without one, and
+    /// deliberately not `private`: a private stored property would make the
+    /// memberwise initialiser private too, and the screen above builds this by
+    /// hand.
+    @Environment(SettingsStore.self) var settingsStore: SettingsStore?
+
     func makeUIView(context: Context) -> TerminalView {
         var options = TerminalOptions.default
         // The daemon replays a 256 KiB scrollback ring on attach; 500 lines
@@ -1654,6 +1762,15 @@ struct SwiftTermView: UIViewRepresentable {
         // A vertical swipe scrolls, whatever is running at the far end. See
         // `TerminalSwipeScroller` for why this cannot be left to SwiftTerm once
         // an application turns mouse reporting on.
+        //
+        // The store is handed over as a closure, not as a value: the scroller
+        // asks it at the start of each gesture, so a change made on the settings
+        // screen while a session is open is live on the next swipe. That is also
+        // why `updateUIView` can stay empty.
+        let store = settingsStore
+        context.coordinator.scroller.speed = { [weak store] in
+            store?.scrollSpeed ?? .default
+        }
         context.coordinator.scroller.attach(to: view)
 
         DispatchQueue.main.async {

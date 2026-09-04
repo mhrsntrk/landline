@@ -146,35 +146,36 @@ struct TerminalScreen: View {
 
     // MARK: - Header
     //
-    // One measured row plus an annotation strip. Everything here is mono with
-    // tabular figures, because all of it is machine data.
+    // One measured row. Everything here is mono with tabular figures, because
+    // all of it is machine data.
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                backControl
-                HStack(spacing: Theme.Metric.grid * 2) {
-                    StatusSquare(level: statusLevel)
-                    Text(liveHost.displayName)
-                        .llValueStrong()
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: Theme.Metric.grid * 2)
-                    measured(label: "GEOM", value: "\(cols)×\(rows)")
-                    measured(label: "AGE", value: nil) {
-                        SessionAgeReadout(createdAt: sessionCreatedAt, endedAt: sessionEndedAt)
-                    }
+        // One measured row, no second line. The annotation strip that used to
+        // sit under this said LIVE / ZSH / SESSION, and on a phone the terminal
+        // is short enough that a whole row of chrome has to earn itself. The
+        // status square already carries the state, the shell is visible in the
+        // prompt, and the session id moved into the measured columns where the
+        // other machine facts live.
+        HStack(spacing: 0) {
+            backControl
+            HStack(spacing: Theme.Metric.grid * 2) {
+                StatusSquare(level: statusLevel)
+                Text(liveHost.displayName)
+                    .llValueStrong()
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: Theme.Metric.grid * 2)
+                if let sessionShortID {
+                    measured(label: "SESS", value: sessionShortID)
                 }
-                .padding(.trailing, Theme.Metric.gutter)
+                measured(label: "GEOM", value: "\(cols)×\(rows)")
+                measured(label: "AGE", value: nil) {
+                    SessionAgeReadout(createdAt: sessionCreatedAt, endedAt: sessionEndedAt)
+                }
             }
-            .frame(height: Theme.Metric.hitTarget + Theme.Metric.grid * 2)
-
-            MicroLabel(annotation)
-                .padding(.horizontal, Theme.Metric.gutter)
-                .padding(.bottom, Theme.Metric.grid * 2)
-                .llMeasuredColumn()
-                .animation(Theme.Motion.state, value: annotation)
+            .padding(.trailing, Theme.Metric.gutter)
         }
+        .frame(height: Theme.Metric.hitTarget + Theme.Metric.grid * 2)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.panel)
         .overlay(alignment: .bottom) { Hairline() }
@@ -223,15 +224,14 @@ struct TerminalScreen: View {
         .llMeasuredColumn()
     }
 
-    /// The annotation strip: what state the session is in, and the two facts the
-    /// daemon reported about it. Never invented by the app (PRODUCT.md).
-    private var annotation: String {
-        var parts: [String] = [stateWord]
-        if let attached {
-            parts.append((attached.shell as NSString).lastPathComponent)
-            parts.append("SESSION " + String(attached.sessionID.prefix(8)))
-        }
-        return parts.joined(separator: " / ")
+    /// First four glyphs of the session id: enough to match a row in
+    /// `landlined sessions list`, and the label is kept to four characters
+    /// too, because a column is as wide as the wider of its label and value
+    /// and this row has to hold three columns on a small phone.
+    /// Absent until the daemon has answered.
+    private var sessionShortID: String? {
+        guard let attached else { return nil }
+        return String(attached.sessionID.prefix(4)).uppercased()
     }
 
     private var stateWord: String {
