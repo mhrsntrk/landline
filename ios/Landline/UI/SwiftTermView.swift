@@ -1701,6 +1701,37 @@ enum TerminalFont {
     }
 }
 
+/// `TerminalView` that declines to answer the pixel-size queries.
+///
+/// tmux asks the terminal for its size in pixels (`CSI 14 t` and `CSI 18 t`)
+/// after a resize. SwiftTerm answers, and if tmux is in copy mode at that
+/// moment it reads the answer as typed keys, so a stray `?` opens copy mode's
+/// search prompt and the pane appears to garble itself.
+///
+/// Dismissing the keyboard resizes the terminal, and scrolling is what puts
+/// tmux in copy mode, so the two happen together constantly here and what used
+/// to be a rare desktop annoyance became routine.
+///
+/// Declining costs nothing this app uses: the pixel dimensions matter to inline
+/// image protocols (sixel, kitty graphics), which it does not implement. Every
+/// other window command still goes to `super`.
+final class LandlineTerminalView: TerminalView {
+    override func windowCommand(
+        source: Terminal,
+        command: Terminal.WindowManipulationCommand
+    ) -> [UInt8]? {
+        switch command {
+        case .reportTextAreaPixelDimension,
+             .reportTerminalWindowPixelDimension,
+             .reportSizeOfScreenInPixels,
+             .reportCellSizeInPixels:
+            return nil
+        default:
+            return super.windowCommand(source: source, command: command)
+        }
+    }
+}
+
 // MARK: - SwiftTermView
 
 /// UIViewRepresentable wrapper around SwiftTerm's TerminalView.
@@ -1736,7 +1767,7 @@ struct SwiftTermView: UIViewRepresentable {
         // standard 6x6x6 cube plus grayscale ramp: what every other terminal does.
         options.ansi256PaletteStrategy = .xterm
 
-        let view = TerminalView(frame: .zero, font: nil, options: options)
+        let view = LandlineTerminalView(frame: .zero, font: nil, options: options)
         view.terminalDelegate = context.coordinator
         // SwiftTerm ships its own grey, rounded, iOS-styled key strip as the
         // input accessory. This app draws that keypad itself, in world; two of
