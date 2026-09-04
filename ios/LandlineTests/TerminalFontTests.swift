@@ -536,3 +536,42 @@ final class TerminalFontSizeTests: XCTestCase {
         }
     }
 }
+
+/// The picker once said "NOT INSTALLED / FALLS BACK TO BUNDLED" about
+/// Berkeley Mono in the same breath as confirming the request succeeded, and
+/// the terminal quietly rendered in the bundled face. The cause was two
+/// different notions of "installed": the request path asked whether the font
+/// instantiates, while everything else asked `UIFont.fontNames(forFamilyName:)`,
+/// which on iOS never names a font a provider app installed.
+final class FontInstalledConsistencyTests: XCTestCase {
+    /// If a name resolves, every other code path must agree it is usable.
+    /// This is the invariant the bug violated.
+    func testResolvedFamiliesAreAlwaysReportedInstalled() {
+        for name in ["Menlo", "Courier New", "JetBrainsMonoNFM-Regular", "Menlo-Regular"] {
+            guard let resolved = TerminalFont.resolvedFamily(for: name) else { continue }
+            XCTAssertTrue(
+                TerminalFont.isInstalled(family: resolved),
+                "\(name) resolved to '\(resolved)' but isInstalled said no; that split is exactly "
+                    + "what made the terminal fall back to the bundled face for a working font."
+            )
+        }
+    }
+
+    /// A resolvable family must also produce its own face, not the fallback.
+    func testResolvedFamiliesActuallyRenderInThatFamily() {
+        for name in ["Menlo", "Courier New"] {
+            guard let resolved = TerminalFont.resolvedFamily(for: name) else { continue }
+            let font = TerminalFont.font(family: resolved, size: 14, bold: false)
+            XCTAssertEqual(
+                font.familyName, resolved,
+                "font(family:) returned \(font.familyName) for '\(resolved)'; a silent fallback here "
+                    + "is invisible until someone looks at a screenshot."
+            )
+        }
+    }
+
+    func testUnknownFamiliesAreStillRejected() {
+        XCTAssertFalse(TerminalFont.isInstalled(family: "Definitely Not A Font 8817"))
+        XCTAssertNil(TerminalFont.resolvedFamily(for: "Definitely Not A Font 8817"))
+    }
+}

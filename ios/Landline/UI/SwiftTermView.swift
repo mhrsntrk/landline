@@ -564,7 +564,20 @@ enum TerminalFont {
     /// True when at least one face is registered under this family name. This
     /// is the only reliable "does this font exist" question on iOS.
     static func isInstalled(family: String) -> Bool {
-        !UIFont.fontNames(forFamilyName: family).isEmpty
+        // The enumeration answer first, because it is cheap and covers every
+        // system and bundled face.
+        if !UIFont.fontNames(forFamilyName: family).isEmpty { return true }
+        // Then the one that matters for a font a provider app installed.
+        // Those never appear in ANY enumeration API on iOS, so asking
+        // `fontNames(forFamilyName:)` alone reports a perfectly working,
+        // already-granted font as missing. It is what made the picker say
+        // "NOT INSTALLED" about Berkeley Mono in the same breath as
+        // confirming it was available, and worse, it made the terminal fall
+        // back to the bundled face. Instantiating is the only honest test.
+        guard let font = UIFont(name: family, size: probeSize) else { return false }
+        // `UIFont(name:)` is nil for an unknown name, but guard against a
+        // near-miss resolving to some other family.
+        return font.familyName.caseInsensitiveCompare(family) == .orderedSame
     }
 
     // MARK: Enumeration
@@ -668,6 +681,17 @@ enum TerminalFont {
         count(UIFont.familyNames, into: \.system)
         count(availableFamilyNames(), into: \.available)
         count(registeredFamilyNames(), into: \.registered)
+
+        // Granted fonts are invisible to all three sources above: iOS never
+        // lists a provider-installed font, even after the user has approved
+        // it. Without remembering them, a font the owner successfully
+        // requested would vanish from the picker on the next launch and have
+        // to be typed in again. These are not counted in the census, which
+        // deliberately reports only what the system APIs returned.
+        for family in grantedFamilies where verdicts[family] == nil {
+            let verdict = candidacy(of: family)
+            if verdict != .rejected { verdicts[family] = verdict }
+        }
 
         let list = verdicts
             .filter { $0.value != .rejected }
@@ -778,6 +802,9 @@ enum TerminalFont {
                 return true
             }
             guard first else { return }
+            // Record a win so the family survives into the next launch's
+            // picker; nothing else can remember it.
+            if let resolved = outcome.resolvedFamily { rememberGranted(family: resolved) }
             // The handler's queue is undocumented; every caller here touches
             // SwiftUI state or UIKit, so it is pinned to main.
             DispatchQueue.main.async { completion(outcome) }
@@ -812,6 +839,28 @@ enum TerminalFont {
         if let font = UIFont(name: trimmed, size: probeSize) { return font.familyName }
         if isInstalled(family: trimmed) { return trimmed }
         return nil
+    }
+
+    /// Families the user has successfully granted this app access to.
+    ///
+    /// Persisted because no enumeration API on iOS will ever name a
+    /// provider-installed font, so this is the only record that it belongs in
+    /// the picker. Entries are re-validated on read: a profile can be removed,
+    /// and a name that no longer resolves should quietly stop being offered.
+    private static let grantedKey = "terminal.grantedFontFamilies"
+
+    static var grantedFamilies: [String] {
+        let stored = UserDefaults.standard.stringArray(forKey: grantedKey) ?? []
+        return stored.filter { isInstalled(family: $0) }
+    }
+
+    static func rememberGranted(family: String) {
+        let trimmed = family.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        var stored = UserDefaults.standard.stringArray(forKey: grantedKey) ?? []
+        guard !stored.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) else { return }
+        stored.append(trimmed)
+        UserDefaults.standard.set(stored, forKey: grantedKey)
     }
 
     /// Families already asked about in this process, so a repeat visit to the
