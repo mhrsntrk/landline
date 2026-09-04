@@ -255,6 +255,15 @@ Stated up front so they stay dead: no screen sharing or remote desktop, ever. No
 SFTP browser. No port forwarding UI. No Android, no web client, no desktop client. No hosted
 service, no accounts, no backend to trust. No multi-user or team features: one person, N machines.
 
+## Using an agent
+
+`AGENTS.md` (also readable as `CLAUDE.md`) carries the build commands, the rules
+that are not style preferences, and the traps this repository has already hit.
+
+`skills/landline-setup/SKILL.md` is for the other direction: pointing a coding
+agent at someone's machine to install and verify the daemon for them, including
+the failure modes that are easy to misdiagnose.
+
 ## Documentation
 
 - [docs/SCOPE.md](docs/SCOPE.md): what this is, non-goals, architecture, security model, session design.
