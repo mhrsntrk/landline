@@ -33,8 +33,7 @@ struct HostEditView: View {
     @FocusState private var focusedField: Field?
 
     /// The startup command is not here: it is a chain of fields now, and
-    /// `StartupChainEditor` owns focus across its own rows.
-    private enum Field: Hashable { case name, hostname, port }
+    private enum Field: Hashable { case name, hostname, port, startCommand }
 
     /// The settings that are read far more often than they are changed.
     private enum Route: String, Hashable {
@@ -160,12 +159,19 @@ struct HostEditView: View {
                     }
 
                     section("SESSION") {
-                        // One line until there is a reason for more: the
-                        // editor stays the single field this section always
-                        // was until a second step exists. It also owns the
-                        // note about the login shell, which belongs next to
-                        // the steps it explains.
-                        StartupChainEditor(command: $host.startCommand)
+                        FieldRow(label: "STARTUP COMMAND", annotation: "OPTIONAL") {
+                            TextField("", text: $host.startCommand,
+                                      prompt: prompt("tmux new -A -s main"))
+                                .focused($focusedField, equals: .startCommand)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
+                        // Worth stating because it is genuinely surprising:
+                        // without an interactive login shell an alias or a
+                        // function simply is not found.
+                        proseText("Runs through your login shell interactively, so aliases and "
+                            + "functions resolve. Leave it empty for the machine's own default.")
+                            .padding(.top, Theme.Metric.grid * 2)
                     }
 
                     section("TERMINAL") {
@@ -343,7 +349,7 @@ struct HostEditView: View {
         saved.name = saved.name.trimmingCharacters(in: .whitespaces)
         // Steps in, steps out: each one trimmed and every blank row dropped, so
         // what `hosts.json` holds is the chain and nothing else.
-        saved.startCommand = StartupChain.normalized(saved.startCommand)
+        saved.startCommand = saved.startCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         onSave(saved, secretEdited ? unlockSecret : nil)
         dismiss()
     }
