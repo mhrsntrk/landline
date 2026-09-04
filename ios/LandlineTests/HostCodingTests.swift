@@ -32,8 +32,30 @@ final class HostCodingTests: XCTestCase {
         XCTAssertEqual(host.colorScheme, .oneDarkPro)
         XCTAssertEqual(host.fontFamily, "", "no stored font means the bundled Nerd Font")
         XCTAssertEqual(host.fontSize, 0, "no stored size means the app-wide default")
+        XCTAssertEqual(host.leaderKey, "C-b", "no stored leader means tmux's own default")
         XCTAssertNil(host.lastShell)
         XCTAssertNil(host.lastAttachedAt)
+    }
+
+    /// The migration that matters for the leader: a `hosts.json` written before
+    /// the setting existed must still decode, and must land on tmux's own
+    /// default rather than on nothing, which would disable the LDR key.
+    func testLegacyHostGetsTheDefaultLeader() throws {
+        let host = try XCTUnwrap(Host.decodeList(from: Data(legacyDocument.utf8)).first)
+        XCTAssertEqual(host.leaderKey, LeaderKey.default)
+        XCTAssertEqual(LeaderKey.byte(for: host.leaderKey), 0x02)
+    }
+
+    /// C-b is a default, never an assumption: a host that stores another prefix
+    /// resolves to that prefix, and a stored value this build cannot parse is
+    /// reported as unresolved rather than silently replaced with C-b.
+    func testStoredLeaderIsHonoured() throws {
+        let document = #"[{"hostname":"a.ts.net","leaderKey":"C-a"},{"hostname":"b.ts.net","leaderKey":"nonsense"}]"#
+        let hosts = try Host.decodeList(from: Data(document.utf8))
+        XCTAssertEqual(hosts[0].leaderKey, "C-a")
+        XCTAssertEqual(LeaderKey.byte(for: hosts[0].leaderKey), 0x01)
+        XCTAssertEqual(hosts[1].leaderKey, "nonsense")
+        XCTAssertNil(LeaderKey.byte(for: hosts[1].leaderKey))
     }
 
     func testEmptyObjectDecodesToADefaultHost() throws {
@@ -81,8 +103,10 @@ final class HostCodingTests: XCTestCase {
         host.colorScheme = .matchSystem
         host.fontFamily = "Menlo"
         host.fontSize = 16
+        host.leaderKey = "C-a"
         host.lastShell = "/bin/zsh"
         let decoded = try XCTUnwrap(Host.decodeList(from: Host.encodeList([host])).first)
+        XCTAssertEqual(decoded.leaderKey, "C-a")
         XCTAssertEqual(decoded.startCommand, "tmux new -A -s main")
         XCTAssertEqual(decoded.colorScheme, .matchSystem)
         XCTAssertEqual(decoded.fontFamily, "Menlo")

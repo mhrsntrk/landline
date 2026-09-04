@@ -37,7 +37,7 @@ struct HostEditView: View {
 
     /// The settings that are read far more often than they are changed.
     private enum Route: String, Hashable {
-        case palette, font, security
+        case palette, font, leader, security
     }
 
     let onSave: (Host, String?) -> Void
@@ -67,6 +67,7 @@ struct HostEditView: View {
         switch demoSection {
         case "font", "fontrequest": return .font
         case "palette": return .palette
+        case "leader": return .leader
         case "security": return .security
         default: return nil
         }
@@ -178,6 +179,15 @@ struct HostEditView: View {
                                    detail: "\(Int(TerminalFont.size(forHost: host.fontSize))) PT") {
                             route = .font
                         }
+                        Hairline()
+                        // The byte, not just the notation: a wrong tmux prefix
+                        // produces no error and no output, so the only way to
+                        // check it from here is to be shown what it sends.
+                        SummaryRow(label: "LEADER",
+                                   value: host.leaderKey,
+                                   detail: LeaderKey.byteLabel(for: host.leaderKey)) {
+                            route = .leader
+                        }
                     }
 
                     section("SECURITY") {
@@ -221,6 +231,8 @@ struct HostEditView: View {
             HostFontView(host: $host,
                          demoPrefill: Self.demoRoute == .font,
                          autoRequest: Self.demoRequestsFont)
+        case .leader:
+            HostLeaderView(host: $host)
         case .security:
             HostSecurityView(host: $host,
                              secret: $unlockSecret,

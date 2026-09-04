@@ -136,6 +136,19 @@ struct Host: Codable, Identifiable, Hashable {
     /// 9...22 lives in `TerminalFont.size(forHost:)`.
     var fontSize: Double = 0
 
+    /// This machine's tmux prefix, in tmux's own notation: `C-b`, `C-a`,
+    /// `C-Space`, `C-\`, or anything else of the `C-<key>` shape.
+    ///
+    /// Per host rather than app-wide, because a tmux config belongs to the
+    /// machine: one box can be running the stock `C-b` while another has
+    /// `set -g prefix C-a` with `C-b` unbound, and a leader key that is right on
+    /// one of them and silently wrong on the other is worse than none.
+    ///
+    /// C-b is the default only because it is tmux's own. Nothing in the app
+    /// hardcodes it; `LeaderKey.byte(for:)` resolves whatever is stored, and a
+    /// notation that does not resolve disables the LDR key rather than guessing.
+    var leaderKey: String = LeaderKey.default
+
     // MARK: Daemon-reported cache
     //
     // The daemon is the source of truth (PRODUCT.md); these two are only the
@@ -197,7 +210,8 @@ struct Host: Codable, Identifiable, Hashable {
 extension Host {
     enum CodingKeys: String, CodingKey {
         case id, name, hostname, port, useTLS, requireFaceID, lastSessionID
-        case startCommand, colorScheme, fontFamily, fontSize, lastShell, lastAttachedAt
+        case startCommand, colorScheme, fontFamily, fontSize, leaderKey
+        case lastShell, lastAttachedAt
     }
 
     /// Written by hand, not synthesised, because a `var` with a default still
@@ -218,6 +232,7 @@ extension Host {
         colorScheme = try container.decodeIfPresent(TerminalColorScheme.self, forKey: .colorScheme) ?? .oneDarkPro
         fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? ""
         fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? 0
+        leaderKey = try container.decodeIfPresent(String.self, forKey: .leaderKey) ?? LeaderKey.default
         lastShell = try container.decodeIfPresent(String.self, forKey: .lastShell)
         lastAttachedAt = try container.decodeIfPresent(Date.self, forKey: .lastAttachedAt)
     }

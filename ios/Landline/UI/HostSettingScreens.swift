@@ -24,8 +24,6 @@ struct SettingScreen<Content: View>: View {
     let annotation: String
     @ViewBuilder var content: Content
 
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -40,11 +38,23 @@ struct SettingScreen<Content: View>: View {
         }
         .background(Theme.panel)
         .scrollDismissesKeyboard(.interactively)
-        .safeAreaInset(edge: .top, spacing: 0) { header }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            SettingHeader(title: title, annotation: annotation)
+        }
         .toolbar(.hidden, for: .navigationBar)
     }
+}
 
-    private var header: some View {
+/// `SettingScreen`'s header on its own, for the one setting screen that cannot
+/// be a `ScrollView`: the key bar's list reorders, so it is a `List`, and a
+/// `List` inside a `ScrollView` is a scroll view inside a scroll view.
+struct SettingHeader: View {
+    let title: String
+    let annotation: String
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .lastTextBaseline, spacing: Theme.Metric.grid * 2) {
                 Text(title)
@@ -210,6 +220,143 @@ struct HostPaletteView: View {
     /// fit the smallest phone this app supports.
     private static let patch = CGSize(width: 9, height: 7)
     private static let specimenInset: CGFloat = 2
+}
+
+// MARK: - Leader
+
+/// The tmux prefix this machine is configured with.
+///
+/// Per host, because a tmux config belongs to the machine: `set -g prefix C-a`
+/// on one box and stock `C-b` on another is the normal case, not the exotic one,
+/// and a prefix that is right on one machine and silently wrong on the next is
+/// the failure this screen exists to prevent.
+///
+/// Which is also why every row prints its byte. A wrong prefix produces no
+/// error, no beep, and no output — tmux simply never enters command mode — so
+/// the only way to check the setting is to be shown what it will actually send.
+struct HostLeaderView: View {
+    @Binding var host: Host
+
+    /// What the user typed into the custom field. Seeded from the stored value
+    /// when it is not one of the presets, so reopening the screen shows the
+    /// prefix that is set rather than an empty box.
+    @State private var typed: String = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        SettingScreen(title: "LEADER", annotation: annotation) {
+            proseText("The tmux prefix this machine is configured with. `LDR` in the key bar arms it, and whatever you press next, from the bar or from the keyboard, is sent straight after it.")
+                .llProse()
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, Theme.Metric.grid * 3)
+
+            VStack(spacing: 0) {
+                ForEach(Array(LeaderKey.presets.enumerated()), id: \.element) { index, preset in
+                    if index > 0 { Hairline() }
+                    row(preset)
+                }
+            }
+
+            Hairline()
+            custom
+        }
+        .task {
+            if !LeaderKey.presets.contains(host.leaderKey) { typed = host.leaderKey }
+        }
+    }
+
+    /// The header line, and the one fact that makes a wrong prefix visible:
+    /// the notation, and the byte it resolves to.
+    private var annotation: String {
+        "\(host.leaderKey) / \(LeaderKey.byteLabel(for: host.leaderKey))"
+    }
+
+    private func row(_ notation: String) -> some View {
+        let isSelected = host.leaderKey == notation
+        return Button {
+            withAnimation(Theme.Motion.state) {
+                host.leaderKey = notation
+                typed = ""
+            }
+            focused = false
+        } label: {
+            HStack(spacing: Theme.Metric.grid * 3) {
+                // Selection is a filled accent square, the palette screen's
+                // grammar. Never a checkmark, never a radio.
+                Rectangle()
+                    .fill(isSelected ? Theme.accent : Color.clear)
+                    .frame(width: Theme.Metric.statusSquare, height: Theme.Metric.statusSquare)
+                    .overlay { Rectangle().strokeBorder(Theme.rule, lineWidth: 1) }
+                Text(notation)
+                    .llValue(isSelected ? Theme.inkBright : Theme.ink)
+                Spacer(minLength: Theme.Metric.grid * 2)
+                MicroLabel(presetNote(notation))
+                    .llMeasuredColumn()
+                Text(LeaderKey.hex(for: notation) ?? LeaderKey.unresolvedHex)
+                    .llValue(Theme.inkMuted)
+                    .frame(width: 40, alignment: .trailing)
+                    .llMeasuredColumn()
+            }
+            .frame(minHeight: Theme.Metric.rowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(InstrumentRowButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("\(notation), \(presetNote(notation))"))
+        .accessibilityValue(Text("byte \(LeaderKey.hex(for: notation) ?? "unresolved")"))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// One measured fact per row, not a sentence: five of these stacked would be
+    /// a wall, and the byte column already carries the answer.
+    private func presetNote(_ notation: String) -> String {
+        switch notation {
+        case "C-b": return "TMUX DEFAULT"
+        case "C-a": return "SCREEN HABIT"
+        case "C-Space": return "NUL"
+        case "C-\\": return "FILE SEPARATOR"
+        case "C-o": return "RARELY BOUND"
+        default: return ""
+        }
+    }
+
+    // MARK: Custom
+
+    /// Anything of the `C-<key>` shape. Validated as it is typed and written
+    /// through only when it resolves, so the stored value can never be a prefix
+    /// that does nothing.
+    private var custom: some View {
+        VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
+            FieldRow(label: "CUSTOM", annotation: "C-<KEY>", error: typedError) {
+                HStack(spacing: Theme.Metric.grid * 3) {
+                    TextField("", text: $typed, prompt: Text("C-g").foregroundColor(Theme.inkMuted))
+                        .focused($focused)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onChange(of: typed) { _, new in
+                            // Written through only when it resolves. An
+                            // in-progress "C-" is not an error yet and is not a
+                            // setting either, so it simply does not commit.
+                            if LeaderKey.isValid(new) {
+                                withAnimation(Theme.Motion.state) { host.leaderKey = new }
+                            }
+                        }
+                    Text(LeaderKey.hex(for: typed) ?? LeaderKey.unresolvedHex)
+                        .llValue(typedError == nil ? Theme.inkBright : Theme.inkMuted)
+                        .frame(width: 44, alignment: .trailing)
+                        .llMeasuredColumn()
+                }
+            }
+        }
+    }
+
+    /// Nothing typed is not a mistake; a typed thing that cannot resolve is.
+    private var typedError: String? {
+        let trimmed = typed.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !LeaderKey.isValid(trimmed) else { return nil }
+        return "`\(trimmed)` is not a prefix byte. Write it the way tmux does, `C-` and one key, as in `C-g` or `C-Space`."
+    }
 }
 
 // MARK: - Security

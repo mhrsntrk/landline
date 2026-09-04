@@ -268,7 +268,7 @@ final class Connection {
         if nsError.domain == NSURLErrorDomain {
             switch nsError.code {
             case NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost:
-                return "host unreachable — is Tailscale up?"
+                return "host unreachable, check that Tailscale is up"
             case NSURLErrorTimedOut:
                 return "connection timed out"
             case NSURLErrorNotConnectedToInternet:

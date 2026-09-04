@@ -14,6 +14,7 @@ struct TerminalScreen: View {
     let host: Host
 
     @Environment(HostStore.self) private var store
+    @Environment(SettingsStore.self) private var settings
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
 
@@ -34,8 +35,9 @@ struct TerminalScreen: View {
     /// registration marks in as the session attaches.
     @State private var marksProgress: CGFloat = 0
 
-    @State private var ctrlLatched = false
-    @State private var altLatched = false
+    /// Ctrl, Alt and Leader. The composition rules live on the type, in the
+    /// model, where they can be tested as a state machine — see `LatchState`.
+    @State private var latches = LatchState()
 
     // Unlock
     @State private var typedSecret = ""
@@ -70,6 +72,14 @@ struct TerminalScreen: View {
     /// `TerminalFont.font(family:size:bold:)`.
     private var fontFamily: String { liveHost.fontFamily }
 
+    /// The row as the app-wide setting currently has it.
+    private var keyBar: [ResolvedKey] { settings.resolvedKeyBar }
+
+    /// The byte this host's tmux prefix resolves to. Nil when the stored
+    /// notation is not a `C-<key>` this understands, which the settings screen
+    /// refuses to save but a hand-edited `hosts.json` can still contain.
+    private var leaderByte: UInt8? { LeaderKey.byte(for: liveHost.leaderKey) }
+
     /// Live point size. Held in state rather than read off `host` every time
     /// because the pinch gesture changes it mid-session and writes it back to
     /// the store; `host` is the copy this screen was pushed with and would go
@@ -80,8 +90,16 @@ struct TerminalScreen: View {
         VStack(spacing: 0) {
             header
             terminalRegion
-            KeyBar(ctrlLatched: $ctrlLatched, altLatched: $altLatched) { bytes in
-                sendUserInput(Data(bytes))
+            // An empty layout means the user removed every key, which is a
+            // choice: the bar disappears and the terminal gets its 44pt back.
+            if !keyBar.isEmpty {
+                KeyBar(keys: keyBar,
+                       ctrlLatched: $latches.ctrl,
+                       altLatched: $latches.alt,
+                       leaderLatched: $latches.leader,
+                       leaderByte: leaderByte) { bytes in
+                    sendUserInput(Data(bytes))
+                }
             }
         }
         .background(Theme.ground)
@@ -368,7 +386,10 @@ struct TerminalScreen: View {
         }
         guard !text.isEmpty else { return "The connection dropped." }
         let sentence = "\(text.prefix(1).uppercased())\(text.dropFirst())"
-        return sentence.hasSuffix(".") ? sentence : sentence + "."
+        // A reason may already end in its own terminator; appending a period
+        // to one produced "is Tailscale up?." on screen.
+        let terminated = [".", "?", "!"].contains { sentence.hasSuffix($0) }
+        return terminated ? sentence : sentence + "."
     }
 
     /// Errors the daemon named come through as `CODE: message` (PROTOCOL.md);
@@ -457,6 +478,10 @@ struct TerminalScreen: View {
             store.setLastSessionID(nil, forHostID: host.id)
         }
         reconnect()
+        // Debug screenshot hook, the same idiom as `DemoSeed`: arm the leader so
+        // the latched cell can be looked at rather than reasoned about. After
+        // `reconnect()`, which clears every latch.
+        if DemoSeed.armsLeader { latches.leader = true }
     }
 
     private func handleState(_ newState: Connection.State) {
@@ -507,8 +532,7 @@ struct TerminalScreen: View {
         typedSecret = ""
         marksProgress = 0
         sessionEndedAt = nil
-        ctrlLatched = false
-        altLatched = false
+        latches.clear()
         controller.resetMetrics()
         // Resume via the persisted session id if the store has a newer copy.
         let current = store.host(id: host.id) ?? host
@@ -525,43 +549,17 @@ struct TerminalScreen: View {
     /// Every user-originated byte funnels through here so the latched modifiers
     /// can fold the next key, whether it came from the key bar or the software
     /// keyboard.
+    ///
+    /// The composition rules — and the snapshot-before-clear that keeps them
+    /// honest across a SwiftUI update pass — live on `LatchState`, so they can
+    /// be tested without a view. One frame per keypress, because the tmux prefix
+    /// and the key it prefixes must not be able to arrive split around a
+    /// reconnect.
     private func sendUserInput(_ data: Data) {
         guard !data.isEmpty else { return }
-
-        // Snapshot both latches before releasing either. Clearing one is a
-        // SwiftUI state write, and reading the other after that write is a
-        // read-after-write on the same update pass: Ctrl+Alt lost its ESC
-        // prefix that way, which is exactly the kind of imprecision this app
-        // cannot afford.
-        let ctrl = ctrlLatched
-        let alt = altLatched
-        if ctrl { ctrlLatched = false }
-        if alt { altLatched = false }
-
-        var payload = data
-        if ctrl {
-            var first = payload[payload.startIndex]
-            switch first {
-            case 0x20:
-                // Ctrl-Space is NUL, which the mask alone would not produce.
-                first = 0x00
-            case 0x3f...0x7f:
-                // @ A..Z [ \ ] ^ _ and the lowercase run: k & 0x1f.
-                first = first & 0x1f
-            default:
-                break
-            }
-            payload = Data([first]) + payload.dropFirst()
-        }
-
-        var out = Data()
-        if alt {
-            // Alt is the ESC prefix, which is what every terminal actually
-            // sends for Meta. Applied after Ctrl so Alt+Ctrl+C is ESC 0x03.
-            out.append(0x1b)
-        }
-        out.append(payload)
-        connection.send(.stdin(out))
+        let out = latches.consume(Array(data), leaderByte: leaderByte)
+        guard !out.isEmpty else { return }
+        connection.send(.stdin(Data(out)))
     }
 
     // MARK: - Measurement

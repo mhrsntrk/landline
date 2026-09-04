@@ -19,6 +19,11 @@ struct HostListView: View {
     @State private var now = Date()
     /// Where the filled rows stop, so the ruling can carry on from there.
     @State private var extent = IndexExtent()
+    /// The app-wide settings push. Its own route type rather than a `Bool`, so
+    /// it can share the stack with `openedHost` without the two colliding.
+    @State private var settingsRoute: SettingsRoute?
+
+    private enum SettingsRoute: String, Hashable { case settings }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,6 +55,7 @@ struct HostListView: View {
         .navigationDestination(item: $openedHost) { host in
             TerminalScreen(host: host)
         }
+        .navigationDestination(item: $settingsRoute) { _ in SettingsView() }
         .alert("Face ID could not unlock this host", isPresented: .init(
             get: { authError != nil },
             set: { if !$0 { authError = nil } }
@@ -61,6 +67,8 @@ struct HostListView: View {
         .task {
             DemoSeed.seedIfRequested(into: store)
             if DemoSeed.opensEditor, let first = store.hosts.first { editingHost = first }
+            if DemoSeed.opensTerminal, let first = store.hosts.first { openedHost = first }
+            if DemoSeed.opensSettings { settingsRoute = .settings }
             reachability.probe(store.hosts)
             // 30s is finer than the coarsest unit the age column prints, so the
             // number is never stale by more than one glyph.
@@ -85,6 +93,7 @@ struct HostListView: View {
             HStack(alignment: .lastTextBaseline, spacing: Theme.Metric.grid * 2) {
                 Text("LANDLINE")
                     .llTitle()
+                    .lineLimit(1)
                 Spacer(minLength: Theme.Metric.grid * 2)
                 if !store.hosts.isEmpty {
                     Button("RECHECK") { reachability.probe(store.hosts) }
@@ -93,14 +102,26 @@ struct HostListView: View {
                 Button("+ HOST") { showingAddSheet = true }
                     .buttonStyle(InstrumentButtonStyle(emphasis: .primary))
             }
-            MicroLabel(countsAnnotation)
-                .padding(.top, Theme.Metric.grid * 2)
-                .llMeasuredColumn()
-                .animation(Theme.Motion.state, value: countsAnnotation)
+            // The app-wide settings live on the annotation line rather than in
+            // the title row. Three bordered controls beside a 20pt title wrap
+            // "LANDLINE" onto two lines on the narrowest phone this app
+            // supports, and a header that breaks its own title is not a header.
+            // The annotation register was empty to the right, it is already the
+            // line that states facts about the whole screen rather than acting
+            // on one row, and `›` is the mark this world already uses for "there
+            // is a screen behind this" (see `SummaryRow`).
+            HStack(alignment: .lastTextBaseline, spacing: Theme.Metric.grid * 2) {
+                MicroLabel(countsAnnotation)
+                    .llMeasuredColumn()
+                    .animation(Theme.Motion.state, value: countsAnnotation)
+                Spacer(minLength: Theme.Metric.grid * 2)
+                settingsControl
+            }
+            .padding(.top, Theme.Metric.grid)
         }
         .padding(.horizontal, Theme.Metric.gutter)
         .padding(.top, Theme.Metric.grid * 3)
-        .padding(.bottom, Theme.Metric.grid * 3)
+        .padding(.bottom, Theme.Metric.grid)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.panel)
         .overlay(alignment: .bottom) { Hairline() }
@@ -111,6 +132,30 @@ struct HostListView: View {
             TickScale(edge: .horizontal)
                 .padding(.leading, Theme.Metric.gutter)
         }
+    }
+
+    /// Annotation grammar, not a button: micro-caps and the `›` mark, with no
+    /// border, because it states where something is rather than acting on this
+    /// screen. It still carries a full 44pt target, taken out of the header's
+    /// own padding so the strip does not grow to hold it.
+    private var settingsControl: some View {
+        Button {
+            settingsRoute = .settings
+        } label: {
+            // No `MicroLabel` and no `llValue` here: both set their own colour,
+            // which would win over the style's and leave the control with no
+            // pressed state at all.
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Metric.grid) {
+                Text("SETTINGS").font(.llMicroLabel).tracking(0.8)
+                Text("\u{203A}").font(.llValue)
+            }
+            .llMeasuredColumn()
+            .padding(.vertical, Theme.Metric.grid * 3)
+            .padding(.leading, Theme.Metric.grid * 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(AnnotationControlStyle())
+        .accessibilityLabel(Text("app settings"))
     }
 
     private var countsAnnotation: String {
@@ -220,6 +265,17 @@ struct HostListView: View {
         } else {
             try? Keychain.setUnlockSecret(secret, hostID: host.id)
         }
+    }
+}
+
+/// A control drawn in the annotation register: no border, the label brightens
+/// on press. `InstrumentButtonStyle` is the same world but draws a box, and a
+/// third box in a header is what pushed the title onto two lines.
+private struct AnnotationControlStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(configuration.isPressed ? Theme.inkBright : Theme.inkMuted)
+            .animation(Theme.Motion.state, value: configuration.isPressed)
     }
 }
 
@@ -524,6 +580,27 @@ enum DemoSeed {
     /// looked at rather than reasoned about.
     static var showsValidation: Bool { mode == "editerror" }
 
+    /// Debug screenshot hooks for the key bar work: park the run on the
+    /// terminal (optionally with the leader already armed), or on one of the
+    /// app-wide settings screens, each of which auto-pushes the next.
+    static var opensTerminal: Bool { mode == "terminal" || armsLeader }
+    static var armsLeader: Bool { mode == "leaderarmed" }
+    static var opensSettings: Bool { mode == "settings" || opensKeyBar }
+    static var opensKeyBar: Bool { mode == "keybar" || opensCustomKey || opensCatalog }
+    static var opensCatalog: Bool { mode == "catalog" }
+    static var opensCustomKey: Bool { mode == "customkey" || mode == "customkeybad" }
+
+    /// Debug screenshot hook: prefill the custom key editor with a sequence
+    /// that parses, or with one that does not, so the refusal can be looked at
+    /// rather than reasoned about.
+    static var customKeySeed: (label: String, sequence: String)? {
+        switch mode {
+        case "customkey": return ("^W", "\\e[1;5D")
+        case "customkeybad": return ("^W", "\\e[1;5\\q")
+        default: return nil
+        }
+    }
+
     static func seedIfRequested(into store: HostStore) {
         #if DEBUG
         guard mode != nil, mode != "empty", store.hosts.isEmpty else { return }
@@ -532,6 +609,7 @@ enum DemoSeed {
         one.hostname = showsValidation ? "https://studio tail4f1a" : "studio.tail4f1a.ts.net"
         one.port = showsValidation ? 0 : 443
         one.startCommand = "tmux new -A -s main"
+        one.leaderKey = "C-a"
         one.lastShell = "/bin/zsh"
         one.lastAttachedAt = Date().addingTimeInterval(-14 * 60)
         var two = Host()
