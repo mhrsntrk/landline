@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- NOT WIRED UP. Kept as documentation of a dead end.
+       "Use Installed Fonts" (com.apple.developer.user-fonts / app-usage) is
+       what Apple's custom-font page pairs with CTFontManagerRequestFonts, but
+       enabling it makes Xcode also demand the RESTRICTED "Font Enumeration"
+       capability, which Apple must assign to the team and bundle id by
+       request. That page describes enumerating ALL installed fonts; we only
+       request one font by name, which may not need any entitlement.
+       Build 3 ships without it to find out. If a request on device fails with
+       a permissions error, apply at:
+       https://developer.apple.com/contact/request/font-enumeration/
+       then set CODE_SIGN_ENTITLEMENTS in project.yml and regenerate the
+       provisioning profile. -->
+</dict>
+</plist>

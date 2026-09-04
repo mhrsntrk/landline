@@ -392,6 +392,12 @@ final class TerminalController {
     /// The family last applied, so the pinch gesture can resize without having
     /// to be told again which face it is resizing. Empty is the bundled face.
     private(set) var fontFamily: String = TerminalFont.bundledFamilySentinel
+    /// The size last applied, for the same reason: the pinch starts from what
+    /// is on screen, which since sizes went per-host is not the app default.
+    private(set) var fontSize: CGFloat = TerminalFont.defaultSize
+    /// The pinch settled on a new size. The screen persists it to the host;
+    /// this type has no business knowing where hosts are kept.
+    var onFontSizeChange: ((CGFloat) -> Void)?
 
     /// Resolved appearance in, exactly like `apply(palette:)`: the screen owns
     /// the decision, this owns the UIKit consequences.
@@ -399,6 +405,7 @@ final class TerminalController {
         // Recorded even with no view attached, so the family survives the gap
         // between a SwiftUI update and `makeUIView`.
         self.fontFamily = fontFamily
+        self.fontSize = size
         guard let view = terminalView else { return }
         // Bundled JetBrains Mono Nerd Font Mono unless the user picked a face,
         // and cascaded behind it when they did — see `TerminalFont`. Prompts
@@ -561,25 +568,282 @@ enum TerminalFont {
     }
 
     // MARK: Enumeration
+    //
+    // The assumption this section used to make — that a font installed through
+    // a configuration profile lands in `UIFont.familyNames` like any other — is
+    // wrong, and it is the reason build 2 showed the owner only Courier New and
+    // Menlo on a phone that has Berkeley Mono installed. CoreText says so
+    // outright (CTFontManager.h, `CTFontManagerRequestFonts`):
+    //
+    //   "On iOS, fonts registered by font provider applications in the
+    //    persistent scope are not automatically available to other
+    //    applications. Client applications must call this function to make the
+    //    requested fonts available for font descriptor matching."
+    //
+    // Not available for matching means not enumerated either, by design. So
+    // enumeration is now a union of every source that can name a family, each
+    // counted separately (see `EnumerationCensus`) so the picker can say which
+    // API saw what instead of leaving the owner to guess, and a name that is
+    // listed but cannot yet be instantiated is kept as a distinct state rather
+    // than dropped — dropping it is what makes the font invisible.
+
+    /// True when `UIFont` can actually instantiate a face out of this family.
+    ///
+    /// The distinction that matters: a provider-installed family can be *named*
+    /// by an enumeration source and still be unusable until
+    /// `CTFontManagerRequestFonts` has run, and every measurement in this file
+    /// (the monospace width test, the prompt-icon lookup) silently answers about
+    /// the system fallback font when handed a family it cannot resolve. So the
+    /// question is asked explicitly instead of being inferred from a measurement
+    /// that cannot fail.
+    static func isResolvable(family: String) -> Bool {
+        !UIFont.fontNames(forFamilyName: family).isEmpty
+    }
+
+    /// How many candidate families each enumeration source returned.
+    ///
+    /// Printed verbatim in the picker. When a side-loaded font does not show up
+    /// the first useful question is which API can see it at all, and until this
+    /// existed nobody — owner or developer — had that number.
+    struct EnumerationCensus: Equatable {
+        /// `UIFont.familyNames`.
+        var system = 0
+        /// `CTFontManagerCopyAvailableFontFamilyNames()`.
+        var available = 0
+        /// `CTFontManagerCopyRegisteredFontDescriptors(.persistent, true)`.
+        var registered = 0
+
+        /// Micro-caps, one line, tabular. Reads as instrument silkscreen.
+        var line: String { "SYSTEM \(system) / AVAILABLE \(available) / REGISTERED \(registered)" }
+    }
+
+    /// A family name plus whether the phone can draw it yet.
+    struct Candidate: Hashable {
+        let family: String
+        /// False when some source named the family but `UIFont` cannot
+        /// instantiate it — the provider-installed case that
+        /// `requestAccess(families:completion:)` exists to unblock.
+        let isResolvable: Bool
+    }
+
+    private enum Candidacy {
+        case ready
+        case needsAccess
+        case rejected
+    }
 
     /// Every monospaced family the phone can see, bundled face excluded (it is
-    /// offered separately, as the default), sorted and deduplicated.
+    /// offered separately, as the default), sorted and deduplicated, together
+    /// with the per-source counts.
     ///
-    /// Fonts installed by a configuration profile land in `UIFont.familyNames`
-    /// like any other — that part is just iOS 13+ behaviour. The catch is the
-    /// detection: plenty of hand-built monospaced fonts never set the
-    /// `isFixedPitch`/`traitMonoSpace` flag in their OS/2 table, so trusting the
-    /// symbolic trait alone would hide exactly the font someone went to the
-    /// trouble of side-loading. Measuring four glyphs that differ wildly in a
-    /// proportional face is what actually catches those.
-    static func availableMonospaceFamilies() -> [String] {
-        let bundled = bundledFamilyName
-        var found: Set<String> = []
-        for family in UIFont.familyNames where family != bundled {
-            if isMonospaced(family: family) { found.insert(family) }
+    /// Detection is measured, not declared: plenty of hand-built monospaced
+    /// fonts never set the `isFixedPitch`/`traitMonoSpace` flag in their OS/2
+    /// table, so trusting the symbolic trait alone would hide exactly the font
+    /// someone went to the trouble of side-loading. Measuring four glyphs that
+    /// differ wildly in a proportional face is what actually catches those —
+    /// but only for a family that resolves. An unresolvable one is admitted
+    /// without the test, because measuring it would measure the fallback font.
+    static func candidates() -> (list: [Candidate], census: EnumerationCensus) {
+        var verdicts: [String: Candidacy] = [:]
+        var census = EnumerationCensus()
+
+        func count(_ names: [String], into slot: WritableKeyPath<EnumerationCensus, Int>) {
+            var seen: Set<String> = []
+            var total = 0
+            for raw in names {
+                let family = raw.trimmingCharacters(in: .whitespaces)
+                guard !family.isEmpty, seen.insert(family).inserted else { continue }
+                let verdict: Candidacy
+                if let cached = verdicts[family] {
+                    verdict = cached
+                } else {
+                    verdict = candidacy(of: family)
+                    verdicts[family] = verdict
+                }
+                if verdict != .rejected { total += 1 }
+            }
+            census[keyPath: slot] = total
         }
-        return found.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+
+        count(UIFont.familyNames, into: \.system)
+        count(availableFamilyNames(), into: \.available)
+        count(registeredFamilyNames(), into: \.registered)
+
+        let list = verdicts
+            .filter { $0.value != .rejected }
+            .map { Candidate(family: $0.key, isResolvable: $0.value == .ready) }
+            .sorted { $0.family.localizedCaseInsensitiveCompare($1.family) == .orderedAscending }
+        return (list, census)
     }
+
+    /// Family names only, for the callers that never cared about the census.
+    static func availableMonospaceFamilies() -> [String] {
+        candidates().list.map(\.family)
+    }
+
+    /// Whether a name is worth offering, and in what state.
+    private static func candidacy(of family: String) -> Candidacy {
+        // Dot-prefixed names are the platform's private system faces (.SFUI and
+        // friends). They are not installable, not pickable, and listing them
+        // would bury the one font the owner is actually looking for.
+        guard !family.hasPrefix("."), family != bundledFamilyName else { return .rejected }
+        guard isResolvable(family: family) else { return .needsAccess }
+        return isMonospaced(family: family) ? .ready : .rejected
+    }
+
+    /// CoreText's own family list. Distinct from `UIFont.familyNames` in
+    /// principle — it is the font *manager*'s view rather than UIKit's — so it
+    /// is asked separately even though the two usually agree.
+    private static func availableFamilyNames() -> [String] {
+        (CTFontManagerCopyAvailableFontFamilyNames() as? [String]) ?? []
+    }
+
+    /// Families the font manager has a registration record for.
+    ///
+    /// Honest about its own ceiling: CTFontManager.h says that for the
+    /// persistent scope "only macOS can return fonts registered by any process.
+    /// Other platforms can only return font descriptors registered by the
+    /// application's process." So on iOS this can only ever see fonts *this* app
+    /// registered, and a font installed by iFont will not appear here. It is
+    /// asked anyway because a zero is itself the diagnosis, and because the
+    /// alternative is guessing. `kCTFontManagerScopeUser` is not a second source
+    /// to try: the header defines it as the same raw value (2) as
+    /// `kCTFontManagerScopePersistent`, so one query covers both.
+    private static func registeredFamilyNames() -> [String] {
+        guard let descriptors = CTFontManagerCopyRegisteredFontDescriptors(.persistent, true)
+            as? [CTFontDescriptor] else { return [] }
+        return descriptors.compactMap { descriptor in
+            if let family = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute)
+                as? String { return family }
+            // A descriptor registered by PostScript name still names something
+            // askable; the family is recovered through UIFont below.
+            guard let name = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute)
+                as? String else { return nil }
+            return UIFont(name: name, size: probeSize)?.familyName ?? name
+        }
+    }
+
+    // MARK: Requesting access
+
+    /// What one `CTFontManagerRequestFonts` round trip actually told us.
+    struct RequestOutcome {
+        /// Names iOS reported it could not resolve, read back off the
+        /// descriptors the completion handler returns.
+        let unresolved: [String]
+        /// The family name that is now usable, read back off `UIFont` rather
+        /// than inferred. Nil means the request achieved nothing.
+        let resolvedFamily: String?
+
+        var succeeded: Bool { resolvedFamily != nil }
+    }
+
+    /// Ask iOS to make `name` available to this process, and report what
+    /// happened.
+    ///
+    /// This is the only call that can reach a font installed by a provider app,
+    /// and on iOS it may put a system dialog in front of the user, so it is
+    /// never fired speculatively — only from an explicit tap, or once per
+    /// family per launch for a family this host is already configured to use.
+    ///
+    /// Two descriptors go in per name, because the caller cannot know which
+    /// kind of name was typed: `kCTFontNameAttribute` (what
+    /// `CTFontDescriptorCreateWithNameAndSize` sets, and the right key for a
+    /// PostScript name copied out of the provider app) and
+    /// `kCTFontFamilyNameAttribute` (what `Host.fontFamily` actually holds).
+    /// The unresolved list is reported but not trusted as the verdict: with
+    /// both keys in flight, one of the two comes back unresolved even on a
+    /// complete success. `UIFont` is the ground truth, so it is asked last.
+    static func requestAccess(name: String, completion: @escaping (RequestOutcome) -> Void) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            completion(RequestOutcome(unresolved: [], resolvedFamily: nil))
+            return
+        }
+        let descriptors: [CTFontDescriptor] = [
+            CTFontDescriptorCreateWithNameAndSize(trimmed as CFString, 0),
+            CTFontDescriptorCreateWithAttributes(
+                [kCTFontFamilyNameAttribute: trimmed] as CFDictionary),
+        ]
+        // CTFontManagerRequestFonts does not promise to call back. Measured:
+        // with the user-fonts entitlement present but no context able to
+        // present the grant dialog, the handler never fires at all, which
+        // hung two tests for their full 20s timeout. A caller that waits
+        // forever on it would strand the UI in a pending state, so the
+        // callback is raced against a deadline and delivered exactly once.
+        let delivered = OSAllocatedUnfairLock(initialState: false)
+        func deliverOnce(_ outcome: RequestOutcome) {
+            let first = delivered.withLock { done -> Bool in
+                if done { return false }
+                done = true
+                return true
+            }
+            guard first else { return }
+            // The handler's queue is undocumented; every caller here touches
+            // SwiftUI state or UIKit, so it is pinned to main.
+            DispatchQueue.main.async { completion(outcome) }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + requestTimeout) {
+            deliverOnce(RequestOutcome(unresolved: [trimmed], resolvedFamily: resolvedFamily(for: trimmed)))
+        }
+
+        CTFontManagerRequestFonts(descriptors as CFArray) { unresolvedDescriptors in
+            let unresolved = ((unresolvedDescriptors as? [CTFontDescriptor]) ?? [])
+                .compactMap { descriptor -> String? in
+                    (CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String)
+                        ?? (CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String)
+                }
+            deliverOnce(RequestOutcome(unresolved: unresolved, resolvedFamily: resolvedFamily(for: trimmed)))
+        }
+    }
+
+    /// How long to wait for the system font-grant dialog before giving up.
+    /// Generous: the user has to read and answer a dialog inside it.
+    static let requestTimeout: TimeInterval = 12
+
+    /// The family name a typed string actually resolves to, or nil.
+    ///
+    /// Accepts either a family name or a PostScript face name, because a user
+    /// reading a name out of iFont may copy either, and answers with the
+    /// *family* — which is what `Host.fontFamily` is documented to hold.
+    static func resolvedFamily(for name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        if let font = UIFont(name: trimmed, size: probeSize) { return font.familyName }
+        if isInstalled(family: trimmed) { return trimmed }
+        return nil
+    }
+
+    /// Families already asked about in this process, so a repeat visit to the
+    /// terminal cannot put the system dialog up again and again.
+    private static var requestedFamilies: Set<String> = []
+
+    /// Request-on-use: a family this host is configured for that no longer
+    /// resolves gets one request before the terminal gives up and draws the
+    /// bundled face.
+    ///
+    /// The case this covers is the one that reads as the app losing the
+    /// setting: access was granted once, the app was relaunched, and the
+    /// per-process grant did not survive. Falling straight back to the bundled
+    /// font there would be silent and wrong.
+    ///
+    /// `completion(true)` means the family became usable and the caller should
+    /// re-apply the font. Anything already usable, already asked about, or empty
+    /// completes `false` without touching CoreText.
+    static func requestIfUnresolved(family: String, completion: @escaping (Bool) -> Void) {
+        let trimmed = family.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty,
+              !isInstalled(family: trimmed),
+              requestedFamilies.insert(trimmed).inserted else {
+            completion(false)
+            return
+        }
+        requestAccess(name: trimmed) { outcome in completion(outcome.succeeded) }
+    }
+
+    /// Test seam: the once-per-launch guard is process state, and a test that
+    /// asserts on it has to be able to put it back.
+    static func resetRequestGuard() { requestedFamilies.removeAll() }
 
     /// A family counts as monospaced if any of its faces declares the trait or
     /// measures as fixed pitch.
@@ -652,35 +916,58 @@ enum TerminalFont {
         /// Stored on this host but not currently registered on the phone —
         /// the configuration profile was removed, most likely.
         let isMissing: Bool
+        /// Named by an enumeration source but not yet instantiable: a font a
+        /// provider app installed, which iOS withholds until this app calls
+        /// `CTFontManagerRequestFonts`. Shown, not dropped, because dropping it
+        /// is precisely the bug — and offered as a request rather than as a
+        /// selection, since nothing can be measured about it yet.
+        let needsAccess: Bool
 
         var id: String { family }
         var isBundled: Bool { family.isEmpty }
+        /// The phone can draw this family right now, so it has a specimen and
+        /// its prompt-icon annotation is a measurement rather than a guess.
+        var isResolved: Bool { !isMissing && !needsAccess }
     }
 
-    /// The bundled face first, then every monospaced family the phone can see.
+    /// The bundled face first, then every monospaced family the phone can see,
+    /// then any family a source named but the phone cannot draw yet.
     /// `selected` is included even when it is no longer installed, so a removed
     /// profile shows up as a named, recoverable state instead of the setting
     /// appearing to have reset itself.
-    static func options(selected: String = "") -> [Option] {
+    static func picker(selected: String = "") -> (list: [Option], census: EnumerationCensus) {
         var options: [Option] = [
             Option(family: bundledFamilySentinel,
                    displayName: bundledDisplayName,
                    hasPromptIcons: true,
-                   isMissing: false)
+                   isMissing: false,
+                   needsAccess: false)
         ]
-        var families = availableMonospaceFamilies()
+        let (found, census) = candidates()
+        var rows = found
         let trimmed = selected.trimmingCharacters(in: .whitespaces)
-        let missing = !trimmed.isEmpty && !families.contains(trimmed) && trimmed != bundledFamilyName
-        if missing { families.append(trimmed) }
-        for family in families {
-            options.append(Option(family: family,
-                                  displayName: family,
-                                  hasPromptIcons: missing && family == trimmed
-                                      ? false
-                                      : hasPromptIcons(family: family),
-                                  isMissing: missing && family == trimmed))
+        let missing = !trimmed.isEmpty
+            && !rows.contains { $0.family == trimmed }
+            && trimmed != bundledFamilyName
+        if missing { rows.append(Candidate(family: trimmed, isResolvable: false)) }
+        for row in rows {
+            let isMissing = missing && row.family == trimmed
+            let needsAccess = !isMissing && !row.isResolvable
+            options.append(Option(family: row.family,
+                                  displayName: row.family,
+                                  hasPromptIcons: row.isResolvable
+                                      ? hasPromptIcons(family: row.family)
+                                      : false,
+                                  isMissing: isMissing,
+                                  needsAccess: needsAccess))
         }
-        return options
+        return (options, census)
+    }
+
+    /// The picker rows without the census, for the callers that only wanted
+    /// the list.
+    static func options(selected: String = "") -> [Option] {
+        picker(selected: selected).list
     }
 
     // MARK: Size
@@ -690,15 +977,32 @@ enum TerminalFont {
     static let defaultSize: CGFloat = 13
     private static let key = "terminal.fontSize"
 
+    /// The app-wide default point size, kept in UserDefaults.
+    ///
+    /// Size is a *per-host* setting now (`Host.fontSize`), alongside the palette
+    /// and the family, so this is the value a host that has never been given one
+    /// falls back to. It is still read rather than deleted because builds up to
+    /// and including build 2 wrote the pinch gesture's result here, and throwing
+    /// that away would reset the size of every existing host on upgrade.
     static var size: CGFloat {
         get {
             let stored = UserDefaults.standard.double(forKey: key)
             guard stored > 0 else { return defaultSize }
-            return min(maxSize, max(minSize, CGFloat(stored)))
+            return clamp(CGFloat(stored))
         }
         set {
-            UserDefaults.standard.set(Double(min(maxSize, max(minSize, newValue))), forKey: key)
+            UserDefaults.standard.set(Double(clamp(newValue)), forKey: key)
         }
+    }
+
+    static func clamp(_ value: CGFloat) -> CGFloat {
+        min(maxSize, max(minSize, value))
+    }
+
+    /// The size one host renders at. `Host.fontSize` is 0 for every host stored
+    /// before the setting existed, and 0 keeps meaning "the app-wide default".
+    static func size(forHost stored: Double) -> CGFloat {
+        stored > 0 ? clamp(CGFloat(stored)) : size
     }
 }
 
@@ -715,6 +1019,9 @@ struct SwiftTermView: UIViewRepresentable {
     /// Resolved the same way `palette` is: the screen reads it off the host and
     /// hands the answer down. Empty is the bundled Nerd Font.
     let fontFamily: String
+    /// Already resolved through `TerminalFont.size(forHost:)`, so this is a
+    /// concrete point size and never the 0 sentinel.
+    let fontSize: CGFloat
 
     func makeUIView(context: Context) -> TerminalView {
         var options = TerminalOptions.default
@@ -744,7 +1051,7 @@ struct SwiftTermView: UIViewRepresentable {
 
         controller.attach(to: view)
         controller.apply(palette: palette)
-        controller.apply(fontFamily: fontFamily, size: TerminalFont.size)
+        controller.apply(fontFamily: fontFamily, size: fontSize)
 
         let pinch = UIPinchGestureRecognizer(target: context.coordinator,
                                              action: #selector(Coordinator.handlePinch(_:)))
@@ -781,15 +1088,19 @@ struct SwiftTermView: UIViewRepresentable {
             guard let controller else { return }
             switch gesture.state {
             case .began:
-                pinchStartSize = TerminalFont.size
+                // What is on screen, not the app-wide default: this host may
+                // have its own size.
+                pinchStartSize = controller.fontSize
             case .changed, .ended:
                 let target = (pinchStartSize * gesture.scale).rounded()
-                let clamped = min(TerminalFont.maxSize, max(TerminalFont.minSize, target))
-                guard clamped != TerminalFont.size else { return }
-                TerminalFont.size = clamped
+                let clamped = TerminalFont.clamp(target)
+                guard clamped != controller.fontSize else { return }
                 // The family is not the pinch's business; it resizes whatever
                 // face is already installed.
                 controller.apply(fontFamily: controller.fontFamily, size: clamped)
+                // Persisted to the host, so the size the owner pinched to is
+                // the size that host opens at next time.
+                controller.onFontSizeChange?(clamped)
             default:
                 break
             }

@@ -59,6 +59,12 @@ struct TerminalScreen: View {
     /// `TerminalFont.font(family:size:bold:)`.
     private var fontFamily: String { host.fontFamily }
 
+    /// Live point size. Held in state rather than read off `host` every time
+    /// because the pinch gesture changes it mid-session and writes it back to
+    /// the store; `host` is the copy this screen was pushed with and would go
+    /// stale the moment a pinch landed.
+    @State private var fontSize: CGFloat = TerminalFont.defaultSize
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -87,7 +93,7 @@ struct TerminalScreen: View {
                 // is: a configuration profile can be added or removed while the
                 // app is in the background, which changes what this host's
                 // chosen family resolves to.
-                controller.apply(fontFamily: fontFamily, size: TerminalFont.size)
+                applyFont()
                 if case .closed = state { reconnect() }
                 if case .idle = state { reconnect() }
             default:
@@ -215,7 +221,10 @@ struct TerminalScreen: View {
 
     private var terminalRegion: some View {
         ZStack(alignment: .bottom) {
-            SwiftTermView(controller: controller, palette: palette, fontFamily: fontFamily)
+            SwiftTermView(controller: controller,
+                          palette: palette,
+                          fontFamily: fontFamily,
+                          fontSize: fontSize)
                 // The ring the registration marks live in, so a 6pt bracket
                 // never lands on the first glyph cell.
                 .padding(Theme.Metric.grid)
@@ -378,9 +387,35 @@ struct TerminalScreen: View {
         }
     }
 
+    // MARK: - Font
+    //
+    // Request-on-use. A family installed by a provider app (iFont and friends)
+    // is not automatically available to this process — CoreText withholds it
+    // until the app calls `CTFontManagerRequestFonts` — and that grant does not
+    // necessarily outlive the launch it was made in. So a stored family that no
+    // longer resolves gets one request, once per family per launch, before the
+    // terminal settles for the bundled face. Falling back silently is what makes
+    // it look like the app forgot the setting.
+
+    private func applyFont() {
+        controller.apply(fontFamily: fontFamily, size: fontSize)
+        TerminalFont.requestIfUnresolved(family: fontFamily) { becameAvailable in
+            guard becameAvailable else { return }
+            controller.apply(fontFamily: fontFamily, size: fontSize)
+        }
+    }
+
     // MARK: - Connection plumbing
 
     private func wireUpAndConnect() {
+        fontSize = TerminalFont.size(forHost: (store.host(id: host.id) ?? host).fontSize)
+        applyFont()
+        controller.onFontSizeChange = { newSize in
+            fontSize = newSize
+            guard var current = store.host(id: host.id) else { return }
+            current.fontSize = Double(newSize)
+            store.update(current)
+        }
         controller.onSend = { data in sendUserInput(data) }
         controller.onResize = { newCols, newRows in
             cols = newCols

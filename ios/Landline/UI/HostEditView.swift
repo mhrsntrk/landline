@@ -23,9 +23,26 @@ struct HostEditView: View {
     /// Filled once, off the main body: enumerating installed families measures
     /// glyph advances across every font on the phone.
     @State private var fontOptions: [TerminalFont.Option] = []
+    /// How many families each enumeration source returned, printed under the
+    /// picker. When a side-loaded font does not appear, this is the only thing
+    /// in the app that says which API can see it.
+    @State private var fontCensus = TerminalFont.EnumerationCensus()
+    /// The escape hatch: a family name typed by hand, because a font a provider
+    /// app installed cannot be enumerated and therefore cannot be offered.
+    @State private var typedFamily: String = ""
+    @State private var requestInFlight = false
+    /// What the last request attempt did, phrased as a sentence.
+    @State private var requestNote: RequestNote?
     @FocusState private var focusedField: Field?
 
-    private enum Field: Hashable { case name, hostname, port, secret, startCommand }
+    /// One outcome of a `CTFontManagerRequestFonts` round trip, in words.
+    private struct RequestNote: Equatable {
+        let label: String
+        let text: String
+        let isError: Bool
+    }
+
+    private enum Field: Hashable { case name, hostname, port, secret, startCommand, fontName }
 
     let onSave: (Host, String?) -> Void
 
@@ -36,9 +53,34 @@ struct HostEditView: View {
         self.onSave = onSave
     }
 
+    /// Debug screenshot hook, the same idiom as `DemoSeed`: park the sheet on
+    /// the font section, since a screenshot run has no fingers to scroll with.
+    /// Does nothing in a release build and nothing without the variable set.
+    private static var demoSection: String? {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["LANDLINE_DEMO_SECTION"]
+        #else
+        return nil
+        #endif
+    }
+
+    private static var demoParksOnFont: Bool {
+        demoSection == "font" || demoSection == "fontrequest"
+    }
+
+    /// Debug screenshot hook: fire one real `CTFontManagerRequestFonts` for a
+    /// name nothing can resolve, so the failure path can be looked at rather
+    /// than reasoned about. A simulator has no provider-installed font, so this
+    /// is the only side of that call it can reach.
+    private static var demoRequestsFont: Bool { demoSection == "fontrequest" }
+
+    /// Scroll anchor for the hook above.
+    private enum Anchor: Hashable { case font }
+
     var body: some View {
         NavigationStack {
             ScrollView {
+                ScrollViewReader { scroll in
                 VStack(alignment: .leading, spacing: 0) {
                     section("MACHINE") {
                         FieldRow(label: "NAME", annotation: "OPTIONAL") {
@@ -99,6 +141,7 @@ struct HostEditView: View {
                         palettePicker
                         Hairline()
                         fontPicker
+                            .id(Anchor.font)
                     }
 
                     section("SECURITY") {
@@ -125,6 +168,11 @@ struct HostEditView: View {
                 .padding(.horizontal, Theme.Metric.gutter)
                 .padding(.bottom, Theme.Metric.grid * 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .onAppear {
+                    guard Self.demoParksOnFont else { return }
+                    scroll.scrollTo(Anchor.font, anchor: .top)
+                }
+                }
             }
             .background(Theme.panel)
             .defaultScrollAnchor(DemoSeed.scrollsToBottom ? .bottom : .top)
@@ -230,21 +278,52 @@ struct HostEditView: View {
                     fontRow(option)
                 }
             }
+            // The diagnostic. Three numbers, micro-caps, sitting where a plate
+            // number would: which enumeration API saw how many candidate
+            // families. A font installed by a provider app is invisible to all
+            // three, and seeing three small numbers is what tells you that
+            // rather than leaving the picker looking simply empty.
+            MicroLabel(fontCensus.line)
+                .llMeasuredColumn()
+                .accessibilityLabel(Text("font enumeration sources: \(fontCensus.line)"))
             proseText("Fonts you installed with a configuration profile show up here. Only the bundled face is guaranteed to carry the Private Use Area icons a prompt draws; anything missing from your font is drawn from the bundled one, so a prompt never falls back to empty boxes.")
                 .llProse()
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, Theme.Metric.grid)
+            Hairline()
+            sizeControl
+            Hairline()
+            specimen
+            Hairline()
+            manualEntry
                 .padding(.bottom, Theme.Metric.grid * 4)
         }
         // Enumerating every installed family measures glyph advances, which is
         // far too much work to redo on every body evaluation.
-        .task { fontOptions = TerminalFont.options(selected: host.fontFamily) }
+        .task {
+            refreshFontOptions()
+            if Self.demoParksOnFont, typedFamily.isEmpty { typedFamily = "Berkeley Mono" }
+            if Self.demoRequestsFont { request(name: typedFamily) }
+        }
+    }
+
+    private func refreshFontOptions() {
+        let picker = TerminalFont.picker(selected: host.fontFamily)
+        fontOptions = picker.list
+        fontCensus = picker.census
     }
 
     private func fontRow(_ option: TerminalFont.Option) -> some View {
         let isSelected = host.fontFamily == option.family
         return Button {
-            withAnimation(Theme.Motion.state) { host.fontFamily = option.family }
+            // A family iOS has not made available yet cannot be selected —
+            // there is nothing to select. Tapping it asks for it instead, which
+            // is the only action that can change the answer.
+            if option.needsAccess {
+                request(name: option.family)
+            } else {
+                withAnimation(Theme.Motion.state) { host.fontFamily = option.family }
+            }
         } label: {
             HStack(alignment: .top, spacing: Theme.Metric.grid * 3) {
                 Rectangle()
@@ -258,17 +337,16 @@ struct HostEditView: View {
                         // the terminal would compose for this row. A family
                         // that is not installed has no specimen to show, so it
                         // falls back to the app's own face.
-                        .font(option.isMissing
-                              ? .llValueStrong
-                              : Font(TerminalFont.font(family: option.family, size: 15, bold: false)))
+                        .font(option.isResolved
+                              ? Font(TerminalFont.font(family: option.family, size: 15, bold: false))
+                              : .llValueStrong)
                         .foregroundStyle(isSelected ? Theme.inkBright : Theme.ink)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    MicroLabel(fontAnnotation(option),
-                               color: option.isMissing ? Theme.alertText : Theme.inkMuted)
+                    MicroLabel(fontAnnotation(option), color: fontAnnotationColor(option))
                 }
                 Spacer(minLength: 0)
-                if !option.isMissing {
+                if option.isResolved {
                     promptIconSpecimen(option)
                 }
             }
@@ -283,8 +361,15 @@ struct HostEditView: View {
     /// looked up in the font.
     private func fontAnnotation(_ option: TerminalFont.Option) -> String {
         if option.isMissing { return "NOT INSTALLED / FALLS BACK TO BUNDLED" }
+        if option.needsAccess { return "NEEDS ACCESS / TAP TO REQUEST" }
         if option.isBundled { return "DEFAULT / FULL PROMPT ICONS" }
         return option.hasPromptIcons ? "FULL PROMPT ICONS" : "ICONS FROM BUNDLED"
+    }
+
+    private func fontAnnotationColor(_ option: TerminalFont.Option) -> Color {
+        if option.isMissing { return Theme.alertText }
+        if option.needsAccess { return Theme.warn }
+        return Theme.inkMuted
     }
 
     /// The three codepoints the annotation is measured from, drawn in the face
@@ -296,6 +381,172 @@ struct HostEditView: View {
             .foregroundStyle(Theme.inkMuted)
             .padding(.top, Theme.Metric.grid)
             .accessibilityHidden(true)
+    }
+
+    // MARK: - Size
+    //
+    // The pinch gesture in the terminal has always been able to change this;
+    // there was simply nowhere to read or set it, which made it a setting only
+    // someone who already knew about it could find. Drawn as a bordered mono
+    // stepper rather than a `Stepper`, whose iOS chrome is a grey rounded
+    // segmented capsule this world does not own.
+
+    private var sizeControl: some View {
+        HStack(spacing: Theme.Metric.grid * 2) {
+            MicroLabel("SIZE")
+            MicroLabel("\(Int(TerminalFont.minSize))-\(Int(TerminalFont.maxSize))")
+                .llMeasuredColumn()
+            Spacer(minLength: Theme.Metric.grid * 2)
+            stepButton("−", to: resolvedSize - 1, label: "smaller")
+            // Tabular by construction (SF Mono), and fixed width so the row
+            // does not shift when 9 becomes 10.
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Metric.grid) {
+                Text("\(Int(resolvedSize))")
+                    .llValueStrong()
+                    .frame(minWidth: 22, alignment: .trailing)
+                MicroLabel("PT")
+            }
+            .llMeasuredColumn()
+            stepButton("+", to: resolvedSize + 1, label: "larger")
+        }
+        .frame(minHeight: Theme.Metric.hitTarget)
+        .accessibilityElement(children: .contain)
+    }
+
+    /// What this host actually renders at: its own size, or the app-wide
+    /// default when it has never been given one.
+    private var resolvedSize: CGFloat {
+        TerminalFont.size(forHost: host.fontSize)
+    }
+
+    private func stepButton(_ glyph: String, to newValue: CGFloat, label: String) -> some View {
+        Button(glyph) {
+            withAnimation(Theme.Motion.state) { host.fontSize = Double(newValue) }
+        }
+        .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
+        .disabled(newValue < TerminalFont.minSize || newValue > TerminalFont.maxSize)
+        .accessibilityLabel(Text(label))
+    }
+
+    // MARK: - Specimen
+    //
+    // The one setting whose value is its own specimen. It renders the family
+    // name and the three prompt codepoints the annotations are measured from, in
+    // the exact font and at the exact size the terminal will compose — so a
+    // font that was just granted access proves itself here immediately, and the
+    // Nerd Font fallback firing behind an unpatched face is visible rather than
+    // promised.
+
+    private var specimen: some View {
+        VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
+            HStack(spacing: Theme.Metric.grid * 2) {
+                MicroLabel("SPECIMEN")
+                Spacer(minLength: 0)
+                MicroLabel("\(Int(resolvedSize)) PT").llMeasuredColumn()
+            }
+            Text(specimenText)
+                .font(Font(TerminalFont.font(family: specimenFamily,
+                                             size: resolvedSize,
+                                             bold: false)))
+                .foregroundStyle(Theme.inkBright)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, Theme.Metric.grid * 3)
+                // Room for the 6pt brackets, so one never lands on a glyph.
+                .padding(.horizontal, Theme.Metric.grid * 3)
+                .background(Theme.ground)
+                // Two brackets on one diagonal: this is a plate showing what the
+                // terminal will draw, so it is marked the way the terminal
+                // viewport is.
+                .overlay { RegistrationMarks(diagonal: .topLeadingBottomTrailing) }
+                .accessibilityLabel(Text("specimen of \(specimenFamily.isEmpty ? TerminalFont.bundledDisplayName : specimenFamily)"))
+        }
+        .padding(.vertical, Theme.Metric.grid * 2)
+    }
+
+    /// The chosen family, unless it is not currently drawable, in which case the
+    /// specimen honestly shows the bundled face the terminal would fall back to.
+    private var specimenFamily: String {
+        TerminalFont.isInstalled(family: host.fontFamily) ? host.fontFamily : ""
+    }
+
+    private var specimenText: String {
+        let name = host.fontFamily.isEmpty ? TerminalFont.bundledDisplayName : host.fontFamily
+        let icons = String(String.UnicodeScalarView(TerminalFont.promptIconCodepoints))
+        return "\(name)  \(icons)"
+    }
+
+    // MARK: - Manual entry
+    //
+    // The escape hatch, and on a phone with a provider-installed font the only
+    // thing that can work. CoreText will not let this app enumerate a font that
+    // iFont (or any other font provider) installed — see `TerminalFont` — so the
+    // name has to come from the user, and `CTFontManagerRequestFonts` is the one
+    // call that can turn a name into a usable face. iOS puts its own dialog in
+    // front of that, which is why this is a deliberate button and not something
+    // the picker does on its own.
+
+    private var manualEntry: some View {
+        VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
+            FieldRow(label: "FONT NOT LISTED", annotation: "FAMILY NAME") {
+                HStack(spacing: Theme.Metric.grid * 3) {
+                    TextField("", text: $typedFamily, prompt: prompt("Berkeley Mono"))
+                        .focused($focusedField, equals: .fontName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.go)
+                        .onSubmit { request(name: typedFamily) }
+                    Button(requestInFlight ? "ASKING" : "REQUEST") { request(name: typedFamily) }
+                        .buttonStyle(InstrumentButtonStyle(emphasis: .primary))
+                        .disabled(requestInFlight
+                                  || typedFamily.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            if let note = requestNote {
+                HStack(alignment: .top, spacing: Theme.Metric.grid * 2) {
+                    MicroLabel(note.label, color: note.isError ? Theme.alertText : Theme.ok)
+                        .padding(.top, 1)
+                    proseText(note.text)
+                        .llProse(note.isError ? Theme.alertText : Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .transition(.opacity)
+            } else {
+                proseText("A font installed by an app rather than by a profile is not visible to other apps until they ask for it by name. Type the family name exactly as the font app shows it and iOS will offer you the choice.")
+                    .llProse()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// One `CTFontManagerRequestFonts` round trip, reported plainly either way.
+    private func request(name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !requestInFlight else { return }
+        requestInFlight = true
+        focusedField = nil
+        TerminalFont.requestAccess(name: trimmed) { outcome in
+            requestInFlight = false
+            withAnimation(Theme.Motion.state) {
+                if let family = outcome.resolvedFamily {
+                    host.fontFamily = family
+                    typedFamily = ""
+                    requestNote = RequestNote(
+                        label: "OK",
+                        text: "`\(family)` is available and now set as this host's face. The specimen above is drawn in it.",
+                        isError: false
+                    )
+                } else {
+                    requestNote = RequestNote(
+                        label: "ERR",
+                        text: "iOS could not resolve `\(trimmed)`. Open the app you installed the font with and copy the family name exactly as it appears there, capitals and spaces included.",
+                        isError: true
+                    )
+                }
+                refreshFontOptions()
+            }
+        }
     }
 
     /// Eight normal ANSI colours as 6pt squares, the palette shown as itself.

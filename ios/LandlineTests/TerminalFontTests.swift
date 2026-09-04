@@ -365,3 +365,174 @@ final class TerminalFontCascadeTests: XCTestCase {
         XCTAssertFalse(options.first { $0.family == Self.fixtureFamily }?.isMissing == true)
     }
 }
+
+// MARK: - Provider-installed fonts
+//
+// The bug this suite covers is the one that shipped in build 2: a phone with
+// Berkeley Mono installed through iFont showed only Courier New and Menlo,
+// because CoreText withholds provider-installed fonts from other processes
+// until they call `CTFontManagerRequestFonts` (CTFontManager.h). The simulator
+// has no provider-installed font, so the *success* path of that call cannot be
+// exercised here — only on the owner's phone. What is testable here is
+// everything around it: that all three enumeration sources are actually asked
+// and counted, that a name which cannot be resolved is reported as a failure
+// rather than silently swallowed, and that the once-per-launch guard on
+// request-on-use holds.
+
+final class TerminalFontRequestTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        TerminalFont.resetRequestGuard()
+    }
+
+    override func tearDown() {
+        TerminalFont.resetRequestGuard()
+        super.tearDown()
+    }
+
+    /// The diagnostic the picker prints. Its value is that it is *three*
+    /// numbers: a font visible to one source and not another is the whole
+    /// question, and a single count cannot express it.
+    func testCensusCountsEverySourceSeparately() {
+        let census = TerminalFont.candidates().census
+        XCTAssertGreaterThan(census.system, 0, "UIFont.familyNames sees nothing at all")
+        XCTAssertGreaterThan(census.available, 0,
+                             "CTFontManagerCopyAvailableFontFamilyNames sees nothing at all")
+        // Not asserted to be non-zero: CTFontManager.h says the persistent
+        // scope can only return descriptors registered by *this* process on
+        // iOS, so a font installed by another app can never appear here. Zero
+        // is the expected reading and is itself the diagnosis.
+        XCTAssertGreaterThanOrEqual(census.registered, 0)
+        XCTAssertEqual(census.line,
+                       "SYSTEM \(census.system) / AVAILABLE \(census.available) "
+                           + "/ REGISTERED \(census.registered)")
+    }
+
+    /// The union must not let the private system faces (.SFUI and friends) or a
+    /// proportional family in through the unresolvable door.
+    func testUnionDoesNotAdmitPrivateOrProportionalFamilies() {
+        let list = TerminalFont.candidates().list
+        for candidate in list {
+            XCTAssertFalse(candidate.family.hasPrefix("."),
+                           "private system face \(candidate.family) leaked into the picker")
+            if candidate.isResolvable {
+                XCTAssertTrue(TerminalFont.isMonospaced(family: candidate.family),
+                              "\(candidate.family) is not monospaced")
+            }
+        }
+        XCTAssertFalse(list.contains { $0.family == "Helvetica" })
+        XCTAssertTrue(list.contains { $0.family == "Menlo" && $0.isResolvable })
+    }
+
+    /// Everything the simulator can enumerate is drawable, so the whole list
+    /// must come back resolvable. On the owner's phone a name that arrives
+    /// unresolvable is the interesting case, and it has to be *kept*.
+    func testEnumeratedFamiliesAreResolvableHere() {
+        for candidate in TerminalFont.candidates().list {
+            XCTAssertEqual(candidate.isResolvable,
+                           TerminalFont.isResolvable(family: candidate.family),
+                           candidate.family)
+        }
+    }
+
+    func testResolvedFamilyAcceptsEitherKindOfName() {
+        XCTAssertEqual(TerminalFont.resolvedFamily(for: "Menlo"), "Menlo")
+        // A PostScript face name is what someone copies out of a font app, and
+        // it has to come back as the *family*, which is what Host.fontFamily
+        // is documented to hold.
+        XCTAssertEqual(TerminalFont.resolvedFamily(for: "Menlo-Regular"), "Menlo")
+        XCTAssertEqual(TerminalFont.resolvedFamily(for: "  Menlo  "), "Menlo")
+        XCTAssertNil(TerminalFont.resolvedFamily(for: ""))
+        XCTAssertNil(TerminalFont.resolvedFamily(for: "Berkeley Mono Not Installed Here"))
+    }
+
+    /// The failure path, which is the only one a simulator can reach: a name
+    /// nothing can resolve must come back as a plain "no", so the picker can
+    /// say so instead of appearing to have worked.
+    func testRequestingAnUnknownNameFails() {
+        let done = expectation(description: "request completed")
+        var outcome: TerminalFont.RequestOutcome?
+        TerminalFont.requestAccess(name: "Berkeley Mono Not Installed Here") { result in
+            outcome = result
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 20)
+        let result = outcome
+        XCTAssertNotNil(result)
+        XCTAssertFalse(result?.succeeded == true)
+        XCTAssertNil(result?.resolvedFamily)
+    }
+
+    /// An empty name must never reach CoreText, because CoreText's answer to it
+    /// is a system dialog with nothing in it.
+    func testRequestingAnEmptyNameIsARefusalNotADialog() {
+        let done = expectation(description: "request completed")
+        TerminalFont.requestAccess(name: "   ") { outcome in
+            XCTAssertTrue(outcome.unresolved.isEmpty)
+            XCTAssertNil(outcome.resolvedFamily)
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 2)
+    }
+
+    /// Request-on-use must not put a system dialog in front of someone whose
+    /// font is already working, and must not put one up twice in a launch.
+    func testRequestOnUseSkipsWhatItCannotHelp() {
+        for family in ["", "   ", "Menlo"] {
+            let done = expectation(description: "skipped \(family)")
+            TerminalFont.requestIfUnresolved(family: family) { changed in
+                XCTAssertFalse(changed)
+                done.fulfill()
+            }
+            wait(for: [done], timeout: 2)
+        }
+    }
+
+    func testRequestOnUseAsksOnlyOncePerLaunch() {
+        let missing = "Berkeley Mono Not Installed Here"
+        let first = expectation(description: "first ask reaches CoreText")
+        TerminalFont.requestIfUnresolved(family: missing) { changed in
+            XCTAssertFalse(changed, "nothing can resolve this name in a simulator")
+            first.fulfill()
+        }
+        wait(for: [first], timeout: 20)
+
+        // Second time it must short-circuit, and short-circuiting is
+        // observable: the completion runs synchronously, before this returns.
+        var ranSynchronously = false
+        TerminalFont.requestIfUnresolved(family: missing) { changed in
+            XCTAssertFalse(changed)
+            ranSynchronously = true
+        }
+        XCTAssertTrue(ranSynchronously, "a repeat request must not reach CoreText again")
+    }
+}
+
+// MARK: - Size
+
+final class TerminalFontSizeTests: XCTestCase {
+
+    func testHostSizeFallsBackToTheAppDefault() {
+        XCTAssertEqual(TerminalFont.size(forHost: 0), TerminalFont.size)
+        XCTAssertEqual(TerminalFont.size(forHost: -3), TerminalFont.size)
+    }
+
+    func testHostSizeIsClampedToTheRangeTheStepperOffers() {
+        XCTAssertEqual(TerminalFont.size(forHost: 9), 9)
+        XCTAssertEqual(TerminalFont.size(forHost: 22), 22)
+        XCTAssertEqual(TerminalFont.size(forHost: 8), TerminalFont.minSize)
+        XCTAssertEqual(TerminalFont.size(forHost: 23), TerminalFont.maxSize)
+        XCTAssertEqual(TerminalFont.clamp(1000), TerminalFont.maxSize)
+        XCTAssertEqual(TerminalFont.clamp(-1000), TerminalFont.minSize)
+    }
+
+    /// The composed font has to honour the size, not just the family: the
+    /// stepper is worthless if the cascade quietly resets it.
+    func testComposedFontRendersAtTheRequestedSize() {
+        for size in [TerminalFont.minSize, 13, TerminalFont.maxSize] {
+            XCTAssertEqual(TerminalFont.font(family: "", size: size, bold: false).pointSize, size)
+            XCTAssertEqual(TerminalFont.font(family: "Menlo", size: size, bold: false).pointSize, size)
+        }
+    }
+}

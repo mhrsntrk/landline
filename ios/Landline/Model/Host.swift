@@ -70,6 +70,20 @@ struct Host: Codable, Identifiable, Hashable {
     /// re-installing the profile brings the choice back.
     var fontFamily: String = ""
 
+    /// Point size the terminal renders at, or 0 for "use the app default".
+    ///
+    /// Per-host for the same reason `colorScheme` and `fontFamily` are: a phone
+    /// held at arm's length against a laptop screen wants a different size than
+    /// the same phone reading a build log in bed, and the machine you are on is
+    /// what decides which of those it is. 0 rather than 13 is the default so an
+    /// upgraded host keeps whatever the pinch gesture last left in the app-wide
+    /// setting, instead of silently jumping to 13 on first launch of this build.
+    ///
+    /// `Double` rather than `CGFloat` because this is a stored model value and
+    /// `Codable` on `CGFloat` goes through `NSNumber`; the render-time clamp to
+    /// 9...22 lives in `TerminalFont.size(forHost:)`.
+    var fontSize: Double = 0
+
     // MARK: Daemon-reported cache
     //
     // The daemon is the source of truth (PRODUCT.md); these two are only the
@@ -131,7 +145,7 @@ struct Host: Codable, Identifiable, Hashable {
 extension Host {
     enum CodingKeys: String, CodingKey {
         case id, name, hostname, port, useTLS, requireFaceID, lastSessionID
-        case startCommand, colorScheme, fontFamily, lastShell, lastAttachedAt
+        case startCommand, colorScheme, fontFamily, fontSize, lastShell, lastAttachedAt
     }
 
     /// Written by hand, not synthesised, because a `var` with a default still
@@ -151,6 +165,7 @@ extension Host {
         startCommand = try container.decodeIfPresent(String.self, forKey: .startCommand) ?? ""
         colorScheme = try container.decodeIfPresent(TerminalColorScheme.self, forKey: .colorScheme) ?? .oneDarkPro
         fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? ""
+        fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? 0
         lastShell = try container.decodeIfPresent(String.self, forKey: .lastShell)
         lastAttachedAt = try container.decodeIfPresent(Date.self, forKey: .lastAttachedAt)
     }

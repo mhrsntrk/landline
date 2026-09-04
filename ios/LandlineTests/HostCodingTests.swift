@@ -31,6 +31,7 @@ final class HostCodingTests: XCTestCase {
         XCTAssertEqual(host.startCommand, "")
         XCTAssertEqual(host.colorScheme, .oneDarkPro)
         XCTAssertEqual(host.fontFamily, "", "no stored font means the bundled Nerd Font")
+        XCTAssertEqual(host.fontSize, 0, "no stored size means the app-wide default")
         XCTAssertNil(host.lastShell)
         XCTAssertNil(host.lastAttachedAt)
     }
@@ -42,6 +43,29 @@ final class HostCodingTests: XCTestCase {
         XCTAssertEqual(host.port, 443)
         XCTAssertEqual(host.colorScheme, .oneDarkPro)
         XCTAssertEqual(host.fontFamily, "")
+        XCTAssertEqual(host.fontSize, 0)
+    }
+
+    /// The migration that matters for size: a host written before the setting
+    /// existed must decode to the 0 sentinel, not to a literal 13, so it keeps
+    /// following whatever the pinch gesture left in the app-wide default rather
+    /// than jumping to a new size on the first launch of this build.
+    func testLegacyHostHasNoOwnFontSize() throws {
+        let host = try XCTUnwrap(Host.decodeList(from: Data(legacyDocument.utf8)).first)
+        XCTAssertEqual(host.fontSize, 0)
+        XCTAssertEqual(TerminalFont.size(forHost: host.fontSize), TerminalFont.size,
+                       "0 must resolve to the app-wide default")
+    }
+
+    func testStoredFontSizeIsHonouredAndClamped() throws {
+        let document = #"[{"hostname":"a.ts.net","fontSize":17}]"#
+        let host = try XCTUnwrap(Host.decodeList(from: Data(document.utf8)).first)
+        XCTAssertEqual(host.fontSize, 17)
+        XCTAssertEqual(TerminalFont.size(forHost: host.fontSize), 17)
+        // A size written by a build with a different range, or by a corrupted
+        // file, must not be able to hand SwiftTerm a 400pt grid.
+        XCTAssertEqual(TerminalFont.size(forHost: 400), TerminalFont.maxSize)
+        XCTAssertEqual(TerminalFont.size(forHost: 1), TerminalFont.minSize)
     }
 
     func testUnknownPaletteFallsBackToDefault() throws {
@@ -56,11 +80,13 @@ final class HostCodingTests: XCTestCase {
         host.startCommand = "tmuxon"
         host.colorScheme = .matchSystem
         host.fontFamily = "Berkeley Mono"
+        host.fontSize = 16
         host.lastShell = "/bin/zsh"
         let decoded = try XCTUnwrap(Host.decodeList(from: Host.encodeList([host])).first)
         XCTAssertEqual(decoded.startCommand, "tmuxon")
         XCTAssertEqual(decoded.colorScheme, .matchSystem)
         XCTAssertEqual(decoded.fontFamily, "Berkeley Mono")
+        XCTAssertEqual(decoded.fontSize, 16)
         XCTAssertEqual(decoded.lastShell, "/bin/zsh")
         XCTAssertEqual(decoded.id, host.id)
     }
