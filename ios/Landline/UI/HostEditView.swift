@@ -166,12 +166,6 @@ struct HostEditView: View {
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                         }
-                        // Worth stating because it is genuinely surprising:
-                        // without an interactive login shell an alias or a
-                        // function simply is not found.
-                        proseText("Runs through your login shell interactively, so aliases and "
-                            + "functions resolve. Leave it empty for the machine's own default.")
-                            .padding(.top, Theme.Metric.grid * 2)
                     }
 
                     section("TERMINAL") {
