@@ -56,12 +56,25 @@ jobs:
   # instead of needing native cross toolchains installed. The `.2.31`
   # target suffix pins the minimum glibc (Ubuntu 20.04's) so the binaries
   # run on older distros too, not just whatever the runner has.
+  # Native on both architectures rather than cross-compiled. The previous
+  # cargo-zigbuild setup failed the first release outright: setup-zig could not
+  # fetch a toolchain, every mirror answered 502/404/503 and the official URL
+  # 404'd for the version "latest" resolved to. Building natively removes that
+  # dependency entirely, and GitHub's arm64 runners are free for public repos.
+  #
+  # The trade is the glibc floor. zigbuild pinned 2.31; building on 22.04 links
+  # against 2.35, so these binaries need Ubuntu 22.04 or newer. Anything older
+  # builds from source.
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -71,23 +84,13 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - uses: mlugg/setup-zig@v1
-
-      - run: cargo install --locked cargo-zigbuild
-
-      - run: rustup target add ${{ matrix.target }}
-
-      - run: cargo zigbuild --release -p landlined --target "${{ matrix.target }}.2.31"
+      - run: cargo build --release -p landlined
 
       - name: Package
         run: |
           set -eu
           out="landlined-${{ matrix.target }}"
-          # cargo-zigbuild's output dir depends on how it interprets the
-          # glibc-version-suffixed target, so locate the binary rather than
-          # hardcoding target/<triple>/release.
-          bin="$(find target -type f -name landlined -path "*${{ matrix.target }}*release*" | head -n 1)"
-          cp "$bin" "$out"
+          cp target/release/landlined "$out"
           sha256sum "$out" > "${out}.sha256"
 
       - uses: actions/upload-artifact@v4
