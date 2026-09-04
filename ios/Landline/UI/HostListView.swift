@@ -531,7 +531,7 @@ enum DemoSeed {
         one.name = "studio"
         one.hostname = showsValidation ? "https://studio tail4f1a" : "studio.tail4f1a.ts.net"
         one.port = showsValidation ? 0 : 443
-        one.startCommand = "tmuxon"
+        one.startCommand = "tmux new -A -s main"
         one.lastShell = "/bin/zsh"
         one.lastAttachedAt = Date().addingTimeInterval(-14 * 60)
         var two = Host()

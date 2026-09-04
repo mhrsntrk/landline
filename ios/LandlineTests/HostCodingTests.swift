@@ -77,15 +77,15 @@ final class HostCodingTests: XCTestCase {
     func testRoundTripKeepsNewFields() throws {
         var host = Host()
         host.hostname = "rack.tail4f1a.ts.net"
-        host.startCommand = "tmuxon"
+        host.startCommand = "tmux new -A -s main"
         host.colorScheme = .matchSystem
-        host.fontFamily = "Berkeley Mono"
+        host.fontFamily = "Menlo"
         host.fontSize = 16
         host.lastShell = "/bin/zsh"
         let decoded = try XCTUnwrap(Host.decodeList(from: Host.encodeList([host])).first)
-        XCTAssertEqual(decoded.startCommand, "tmuxon")
+        XCTAssertEqual(decoded.startCommand, "tmux new -A -s main")
         XCTAssertEqual(decoded.colorScheme, .matchSystem)
-        XCTAssertEqual(decoded.fontFamily, "Berkeley Mono")
+        XCTAssertEqual(decoded.fontFamily, "Menlo")
         XCTAssertEqual(decoded.fontSize, 16)
         XCTAssertEqual(decoded.lastShell, "/bin/zsh")
         XCTAssertEqual(decoded.id, host.id)
@@ -95,9 +95,9 @@ final class HostCodingTests: XCTestCase {
     /// is whatever configuration profiles the phone happens to carry, so any
     /// value must survive a round trip rather than being validated away.
     func testStoredFontFamilySurvivesEvenWhenNotInstalled() throws {
-        let document = #"[{"hostname":"a.ts.net","fontFamily":"Berkeley Mono"}]"#
+        let document = #"[{"hostname":"a.ts.net","fontFamily":"Menlo"}]"#
         let host = try XCTUnwrap(Host.decodeList(from: Data(document.utf8)).first)
-        XCTAssertEqual(host.fontFamily, "Berkeley Mono")
+        XCTAssertEqual(host.fontFamily, "Menlo")
     }
 
     func testValidation() {

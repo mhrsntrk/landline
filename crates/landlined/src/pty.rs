@@ -38,7 +38,7 @@ pub struct PtyEvents {
 }
 
 /// Spawn `program` with `args` (both already resolved, e.g. "/bin/zsh" with
-/// `["-l"]`, or "/bin/zsh" with `["-i", "-c", "tmuxon"]`) in a new PTY.
+/// `["-l"]`, or "/bin/zsh" with `["-i", "-c", "tmux new -A -s main"]`) in a new PTY.
 ///
 /// See `Config::resolve_command` for how the pair is derived from the ATTACH
 /// `cmd`, the `default_cmd` config key, and the configured shell.

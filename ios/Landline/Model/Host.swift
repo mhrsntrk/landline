@@ -3,11 +3,30 @@ import Foundation
 /// Which colour scheme the terminal renders in.
 ///
 /// One Dark Pro is the product default (PRODUCT.md pins it as a brand
-/// commitment). `matchSystem` is the escape hatch for someone who wants the
-/// phone to follow iOS light/dark instead. More palettes get added later, so
-/// decoding tolerates raw values this build has never heard of.
+/// commitment) and stays first in the list. The rest are the schemes this
+/// app's audience already reads on their own machines, each transcribed from
+/// its own repository — see `TerminalPalette` for the hexes and the citations.
+/// `matchSystem` is the escape hatch for someone who wants the phone to follow
+/// iOS light/dark instead, and it sorts last because it is a rule rather than
+/// a palette.
+///
+/// Only the terminal is themed. The app's own chrome is One Dark Pro whatever
+/// this says, because DESIGN.md's chrome tokens carry a measured contrast floor
+/// that is calibrated against that one ground.
+///
+/// Raw values are permanent: they are what `hosts.json` stores. Decoding
+/// tolerates raw values this build has never heard of, so a host written by a
+/// newer build reads back as the default rather than losing the whole list.
 enum TerminalColorScheme: String, Codable, CaseIterable, Identifiable, Hashable {
     case oneDarkPro
+    case catppuccinMocha
+    case tokyoNight
+    case gruvboxDark
+    case dracula
+    case nord
+    case solarizedDark
+    case rosePine
+    case catppuccinLatte
     case matchSystem
 
     var id: String { rawValue }
@@ -16,15 +35,46 @@ enum TerminalColorScheme: String, Codable, CaseIterable, Identifiable, Hashable 
     var displayName: String {
         switch self {
         case .oneDarkPro: return "ONE DARK PRO"
+        case .catppuccinMocha: return "CATPPUCCIN MOCHA"
+        case .tokyoNight: return "TOKYO NIGHT"
+        case .gruvboxDark: return "GRUVBOX DARK"
+        case .dracula: return "DRACULA"
+        case .nord: return "NORD"
+        case .solarizedDark: return "SOLARIZED DARK"
+        case .rosePine: return "ROSÉ PINE"
+        case .catppuccinLatte: return "CATPPUCCIN LATTE"
         case .matchSystem: return "MATCH SYSTEM"
         }
     }
 
+    /// Whether this scheme paints a light ground. Only used to warn, in words,
+    /// on the one row that will be blinding at 3am; `matchSystem` is neither
+    /// until the phone answers, so it reports false.
+    var isLight: Bool { self == .catppuccinLatte }
+
     /// One sentence a human wrote, for the picker.
     var summary: String {
         switch self {
-        case .oneDarkPro: return "The scheme your desktops already use."
-        case .matchSystem: return "Follow the phone's light or dark appearance."
+        case .oneDarkPro:
+            return "The scheme your desktops already use, and the app's own."
+        case .catppuccinMocha:
+            return "Catppuccin's darkest flavour, the one most setups are running right now."
+        case .tokyoNight:
+            return "Cold blues on near-black, the way the city looks from a plane."
+        case .gruvboxDark:
+            return "Retro groove: warm, low-saturation, easy on tired eyes."
+        case .dracula:
+            return "High-contrast pastels on slate. The loudest scheme here."
+        case .nord:
+            return "Arctic blue-greys, deliberately quiet. Nothing in it shouts."
+        case .solarizedDark:
+            return "Ethan Schoonover's precision palette. Low contrast on purpose."
+        case .rosePine:
+            return "Muted pine and rose. Soho vibes, as its authors put it."
+        case .catppuccinLatte:
+            return "Light ground. For sunlight, not for bed."
+        case .matchSystem:
+            return "Follow the phone: One Dark Pro in dark, One Light in light."
         }
     }
 
@@ -48,16 +98,22 @@ struct Host: Codable, Identifiable, Hashable {
     /// Last session id returned by ATTACHED, used to resume. Cleared on SESSION_GONE.
     var lastSessionID: String?
 
-    /// Optional per-host startup command. Empty means "use the machine's own
-    /// default login shell". A non-empty value is run by the daemon through the
-    /// login shell interactively (`zsh -i -c "<cmd>"`) so aliases and shell
-    /// functions resolve, which is how `tmuxon` works.
+    /// Optional per-host startup command, written as one step per line. Empty
+    /// means "use the machine's own default login shell". The steps are joined
+    /// with `&&` into the single `cmd` string ATTACH carries, and the daemon
+    /// runs that through the login shell interactively (`zsh -l -i -c "<cmd>"`)
+    /// so aliases and shell functions resolve.
+    ///
+    /// One newline-separated `String` rather than an array of steps, so that a
+    /// single-line value written by every build before this one is already a
+    /// valid one-step chain and there is no migration to get wrong. See
+    /// `StartupChain`.
     var startCommand: String = ""
 
     /// Terminal colour scheme for this host.
     var colorScheme: TerminalColorScheme = .oneDarkPro
 
-    /// Family name of the face the terminal renders in, e.g. "Berkeley Mono".
+    /// Family name of the face the terminal renders in, e.g. "Menlo".
     /// Empty means the bundled JetBrains Mono Nerd Font, which is the default
     /// and the only face guaranteed to carry prompt icons.
     ///
@@ -224,4 +280,210 @@ extension Host {
     static let tailnetExample = "macbook.tail1234.ts.net"
 
     var isValid: Bool { validationErrors.isEmpty }
+}
+
+// MARK: - Startup chain
+//
+// A startup command written as steps, the way a person writes one down:
+//
+//     1.  cd ~/project
+//     2.  tmux new -A -d -s main
+//     3.  tmux attach -t main
+//
+// Stored as one newline-separated `String` (see `Host.startCommand`) and sent
+// as one `&&`-joined `cmd`. `&&` rather than `;` because a failed step must
+// stop the chain: a `cd` that failed has to prevent the steps after it from
+// running in the wrong directory.
+
+/// Turning what the user wrote into what the daemon runs, and back.
+enum StartupChain {
+    /// What the steps are joined with on the wire. `&&`, so a failed step
+    /// stops the chain.
+    static let joiner = " && "
+
+    /// The steps exactly as written, blank lines and all.
+    ///
+    /// Blanks are kept here on purpose: this is what the editor draws rows
+    /// from, and a row must not delete itself the moment its field is cleared.
+    static func steps(in raw: String) -> [String] {
+        raw.isEmpty ? [] : raw.components(separatedBy: .newlines)
+    }
+
+    /// The steps that will actually run: trimmed, with blanks dropped.
+    static func liveSteps(in raw: String) -> [String] {
+        steps(in: raw)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// The canonical stored form: every step trimmed, every blank gone. What
+    /// the edit sheet writes back into `hosts.json`.
+    static func normalized(_ raw: String) -> String {
+        liveSteps(in: raw).joined(separator: "\n")
+    }
+
+    /// The exact string ATTACH sends as `cmd`, or nil when the chain reduces
+    /// to nothing, in which case the daemon falls back to its own
+    /// `default_cmd` and then to a plain login shell (PROTOCOL.md 4).
+    static func command(_ raw: String) -> String? {
+        let steps = liveSteps(in: raw)
+        return steps.isEmpty ? nil : steps.joined(separator: joiner)
+    }
+}
+
+// MARK: - The blocking-step trap
+
+extension StartupChain {
+    /// A step that takes over the terminal while it runs, sitting somewhere
+    /// other than last, so everything after it is waiting on a program the
+    /// user has to quit first.
+    ///
+    /// This is the whole reason the chain UI needs care. Attaching to tmux
+    /// holds the terminal until you detach, so
+    ///
+    ///     cd ~/project && tmux attach -t main && npm run dev
+    ///
+    /// does not start the dev server inside tmux. It starts it in the outer
+    /// shell once you detach, which is the opposite of what it looks like it
+    /// says. The same is true of any alias wrapping an attach, which is why
+    /// the list below carries names as well as programs.
+    struct BlockingStep: Equatable {
+        /// 1-based, the number printed in the editor's gutter.
+        let number: Int
+        /// The step as written.
+        let step: String
+        /// The program the detector recognised, e.g. `tmux`.
+        let program: String
+    }
+
+    /// Programs that hold the terminal until you quit them, recognised by
+    /// their first word. `tmuxon` is in here because a shell function of that
+    /// name — `tmux attach`, falling back to `tmux new` — is a common enough
+    /// dotfile to be worth catching, not because anything here suggests it.
+    ///
+    /// Deliberately a closed list. A bare word this does not know is treated
+    /// as safe, because a false warning on someone's own script teaches them
+    /// to ignore the warning, and then the one that matters is ignored too.
+    private static let blockingPrograms: Set<String> = [
+        "tmuxon", "screen", "ssh",
+        "vim", "nvim", "vi", "emacs", "nano",
+        "less", "top", "htop", "btop", "watch",
+    ]
+
+    /// Every step that blocks while a later step is waiting on it.
+    ///
+    /// Takes the rows as drawn so the numbers it reports are the numbers in
+    /// the gutter. A blank row is neither an offender nor a reason to warn
+    /// about the row above it.
+    static func blockingSteps(in steps: [String]) -> [BlockingStep] {
+        let live = steps.enumerated().filter {
+            !$0.element.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        guard let last = live.last else { return [] }
+        return live
+            .filter { $0.offset != last.offset }
+            .compactMap { index, step in
+                guard let program = blockingProgram(in: step) else { return nil }
+                return BlockingStep(number: index + 1, step: step, program: program)
+            }
+    }
+
+    /// The same question asked of a stored value.
+    static func blockingSteps(inRaw raw: String) -> [BlockingStep] {
+        blockingSteps(in: steps(in: raw))
+    }
+
+    /// The program this step blocks on, or nil if it lets the chain continue.
+    ///
+    /// Judged on the first word only, after stripping `sudo`, leading
+    /// environment assignments, and any path. Two commands get looked at
+    /// further, because their first word alone does not answer the question:
+    /// `tmux` blocks only when it attaches, and `tail` only with `-f`.
+    static func blockingProgram(in step: String) -> String? {
+        var words = tokens(in: step)[...]
+        while let first = words.first, first == "sudo" || isEnvironmentAssignment(first) {
+            words = words.dropFirst()
+        }
+        guard let first = words.first else { return nil }
+        let program = programName(first)
+        let arguments = Array(words.dropFirst())
+
+        switch program {
+        case "tmux":
+            return tmuxAttaches(arguments) ? "tmux" : nil
+        case "tail":
+            return arguments.contains(where: isFollowFlag) ? "tail -f" : nil
+        default:
+            return blockingPrograms.contains(program) ? program : nil
+        }
+    }
+
+    /// Whether this `tmux` invocation ends up attached to a session.
+    ///
+    /// True for an explicit attach and for bare `tmux`, which attaches if it
+    /// can and creates and attaches if it cannot. Everything else is taken at
+    /// face value: `tmux new -d` and `tmux new-window` both return straight
+    /// away, and they are exactly the shape a working chain is built from.
+    private static func tmuxAttaches(_ arguments: [String]) -> Bool {
+        guard let subcommand = tmuxSubcommand(arguments) else { return true }
+        return ["attach", "a", "at", "attach-session"].contains(subcommand)
+    }
+
+    /// The first non-flag argument, skipping the global flags that swallow the
+    /// word after them, so `tmux -L work attach` reads as `attach` and not as
+    /// `work`.
+    private static func tmuxSubcommand(_ arguments: [String]) -> String? {
+        let takesAValue: Set<String> = ["-f", "-L", "-S", "-c"]
+        var index = arguments.startIndex
+        while index < arguments.endIndex {
+            let argument = arguments[index]
+            guard argument.hasPrefix("-") else { return argument }
+            index += takesAValue.contains(argument) ? 2 : 1
+        }
+        return nil
+    }
+
+    /// `-f`, `-F`, `--follow`, and the bundled short forms like `-nf`.
+    private static func isFollowFlag(_ argument: String) -> Bool {
+        if argument.hasPrefix("--") {
+            return argument == "--follow" || argument.hasPrefix("--follow=")
+        }
+        guard argument.hasPrefix("-") else { return false }
+        return argument.dropFirst().contains { $0 == "f" || $0 == "F" }
+    }
+
+    /// `FOO=bar`, the shape that prefixes a command rather than being one.
+    private static func isEnvironmentAssignment(_ token: String) -> Bool {
+        guard let equals = token.firstIndex(of: "="), equals != token.startIndex else { return false }
+        let name = token[token.startIndex..<equals]
+        guard let first = name.first, first == "_" || first.isLetter else { return false }
+        return name.allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
+    }
+
+    /// `/usr/bin/vim` and `~/bin/htop` are still `vim` and `htop`.
+    private static func programName(_ token: String) -> String {
+        String(token.split(separator: "/").last ?? Substring(token))
+    }
+
+    /// Split on whitespace, respecting quotes, so the quoted command inside
+    /// `tmux new-window -n dev 'npm run dev'` stays one argument instead of
+    /// looking like a second program.
+    private static func tokens(in step: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var quote: Character?
+        for character in step {
+            if let open = quote {
+                if character == open { quote = nil } else { current.append(character) }
+            } else if character == "'" || character == "\"" {
+                quote = character
+            } else if character.isWhitespace {
+                if !current.isEmpty { tokens.append(current); current = "" }
+            } else {
+                current.append(character)
+            }
+        }
+        if !current.isEmpty { tokens.append(current) }
+        return tokens
+    }
 }

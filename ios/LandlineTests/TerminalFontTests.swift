@@ -58,7 +58,7 @@ final class TerminalFontTests: XCTestCase {
 // MARK: - Cascade
 //
 // The whole reason `TerminalFont.font(family:size:bold:)` exists. A font the
-// owner installed with a configuration profile — Berkeley Mono, say — is almost
+// installed with a configuration profile is almost
 // never Nerd Font patched, so making it the terminal face naively brings the
 // tofu bug straight back. These tests prove the composed font puts the user's
 // glyphs on screen where it has them and the bundled font's glyphs where it
@@ -70,7 +70,7 @@ final class TerminalFontCascadeTests: XCTestCase {
     /// codepoints kept and the wider Nerd Font icons stripped, renamed to its
     /// own family. It is here because the interesting case is *partial*
     /// coverage: a font that carries some prompt glyphs and not others, which
-    /// is exactly the measured shape of Berkeley Mono on the desktop. Nothing
+    /// is exactly the measured shape of a partially patched face. Nothing
     /// on the simulator has that shape, so the fixture supplies it.
     private static let fixtureFamily = "Landline Partial Test Mono"
     private static var fixtureRegistered = false
@@ -294,11 +294,11 @@ final class TerminalFontCascadeTests: XCTestCase {
     /// returns nil, so an uninstalled family resolves to a proportional system
     /// face and the whole grid shears.
     func testUninstalledFamilyIsTheBundledFont() {
-        let font = TerminalFont.font(family: "Berkeley Mono Not Installed Here",
+        let font = TerminalFont.font(family: "A Font That Is Not Installed",
                                      size: 14, bold: false)
         XCTAssertTrue(font.fontName.hasPrefix("JetBrainsMonoNFM"),
                       "an unknown family must land on the bundled Nerd Font, got \(font.fontName)")
-        XCTAssertFalse(TerminalFont.isInstalled(family: "Berkeley Mono Not Installed Here"))
+        XCTAssertFalse(TerminalFont.isInstalled(family: "A Font That Is Not Installed"))
     }
 
     // MARK: Enumeration
@@ -352,8 +352,8 @@ final class TerminalFontCascadeTests: XCTestCase {
     /// A removed configuration profile must read as a named state, not as the
     /// setting having quietly reset itself.
     func testOptionsKeepASelectionThatIsNoLongerInstalled() {
-        let options = TerminalFont.options(selected: "Berkeley Mono")
-        let row = options.first { $0.family == "Berkeley Mono" }
+        let options = TerminalFont.options(selected: "A Profile Installed Font")
+        let row = options.first { $0.family == "A Profile Installed Font" }
         XCTAssertNotNil(row, "a selected but uninstalled family must still be listed")
         XCTAssertTrue(row?.isMissing == true)
         XCTAssertFalse(row?.hasPromptIcons == true)
@@ -369,7 +369,7 @@ final class TerminalFontCascadeTests: XCTestCase {
 // MARK: - Provider-installed fonts
 //
 // The bug this suite covers is the one that shipped in build 2: a phone with
-// Berkeley Mono installed through iFont showed only Courier New and Menlo,
+// a font installed through a provider app showed only Courier New and Menlo,
 // because CoreText withholds provider-installed fonts from other processes
 // until they call `CTFontManagerRequestFonts` (CTFontManager.h). The simulator
 // has no provider-installed font, so the *success* path of that call cannot be
@@ -391,9 +391,10 @@ final class TerminalFontRequestTests: XCTestCase {
         super.tearDown()
     }
 
-    /// The diagnostic the picker prints. Its value is that it is *three*
-    /// numbers: a font visible to one source and not another is the whole
-    /// question, and a single count cannot express it.
+    /// The union has to keep asking all three enumeration APIs: a font visible
+    /// to one source and not another is the whole question, and one count
+    /// cannot express it. Counted per source so this test can say which one
+    /// went quiet.
     func testCensusCountsEverySourceSeparately() {
         let census = TerminalFont.candidates().census
         XCTAssertGreaterThan(census.system, 0, "UIFont.familyNames sees nothing at all")
@@ -404,9 +405,6 @@ final class TerminalFontRequestTests: XCTestCase {
         // iOS, so a font installed by another app can never appear here. Zero
         // is the expected reading and is itself the diagnosis.
         XCTAssertGreaterThanOrEqual(census.registered, 0)
-        XCTAssertEqual(census.line,
-                       "SYSTEM \(census.system) / AVAILABLE \(census.available) "
-                           + "/ REGISTERED \(census.registered)")
     }
 
     /// The union must not let the private system faces (.SFUI and friends) or a
@@ -444,7 +442,7 @@ final class TerminalFontRequestTests: XCTestCase {
         XCTAssertEqual(TerminalFont.resolvedFamily(for: "Menlo-Regular"), "Menlo")
         XCTAssertEqual(TerminalFont.resolvedFamily(for: "  Menlo  "), "Menlo")
         XCTAssertNil(TerminalFont.resolvedFamily(for: ""))
-        XCTAssertNil(TerminalFont.resolvedFamily(for: "Berkeley Mono Not Installed Here"))
+        XCTAssertNil(TerminalFont.resolvedFamily(for: "A Font That Is Not Installed"))
     }
 
     /// The failure path, which is the only one a simulator can reach: a name
@@ -453,7 +451,7 @@ final class TerminalFontRequestTests: XCTestCase {
     func testRequestingAnUnknownNameFails() {
         let done = expectation(description: "request completed")
         var outcome: TerminalFont.RequestOutcome?
-        TerminalFont.requestAccess(name: "Berkeley Mono Not Installed Here") { result in
+        TerminalFont.requestAccess(name: "A Font That Is Not Installed") { result in
             outcome = result
             done.fulfill()
         }
@@ -490,7 +488,7 @@ final class TerminalFontRequestTests: XCTestCase {
     }
 
     func testRequestOnUseAsksOnlyOncePerLaunch() {
-        let missing = "Berkeley Mono Not Installed Here"
+        let missing = "A Font That Is Not Installed"
         let first = expectation(description: "first ask reaches CoreText")
         TerminalFont.requestIfUnresolved(family: missing) { changed in
             XCTAssertFalse(changed, "nothing can resolve this name in a simulator")
@@ -538,7 +536,7 @@ final class TerminalFontSizeTests: XCTestCase {
 }
 
 /// The picker once said "NOT INSTALLED / FALLS BACK TO BUNDLED" about
-/// Berkeley Mono in the same breath as confirming the request succeeded, and
+/// a profile-installed font in the same breath as confirming the request succeeded, and
 /// the terminal quietly rendered in the bundled face. The cause was two
 /// different notions of "installed": the request path asked whether the font
 /// instantiates, while everything else asked `UIFont.fontNames(forFamilyName:)`,

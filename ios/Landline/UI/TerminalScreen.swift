@@ -213,24 +213,6 @@ struct TerminalScreen: View {
             parts.append((attached.shell as NSString).lastPathComponent)
             parts.append("SESSION " + String(attached.sessionID.prefix(8)))
         }
-        // The face actually in use, read back rather than assumed. This path
-        // has shipped two bugs where the app believed one font was applied and
-        // the screen drew another, neither visible except by reading
-        // letterforms off a photograph.
-        if !controller.resolvedFontFamily.isEmpty {
-            // Requested beside applied, plus whether the applied face can draw
-            // ASCII at all. Three facts instead of one, because a single name
-            // could not distinguish stale state from a font that resolves but
-            // has no glyphs.
-            parts.append("REQ " + controller.requestedFontFamily.uppercased())
-            parts.append("GOT " + controller.resolvedFontFamily.uppercased())
-            // What is drawing the glyphs, which is the only claim that matters.
-            if !controller.drawingFontFamily.isEmpty,
-                controller.drawingFontFamily != controller.resolvedFontFamily {
-                parts.append("DRAWN BY " + controller.drawingFontFamily.uppercased())
-            }
-            if !controller.primaryHasGlyphs { parts.append("NO GLYPHS") }
-        }
         return parts.joined(separator: " / ")
     }
 

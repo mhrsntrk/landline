@@ -21,7 +21,7 @@ pub struct Config {
     pub allowed_logins: Vec<String>,
     /// Shell to spawn for sessions. Empty means auto-resolve at runtime.
     pub shell: String,
-    /// Command every new session opens into, e.g. `tmuxon` to land straight
+    /// Command every new session opens into, e.g. `tmux new -A -s main` to land straight
     /// in a tmux session. Empty means a plain shell. It runs through the
     /// login shell in interactive mode, so aliases and rc files apply; see
     /// [`resolve_command`]. An ATTACH `cmd` from the client overrides it.
@@ -179,8 +179,8 @@ fn shell_command(shell: &str, command: &str) -> (String, Vec<String>) {
     // `-i` sources the interactive rc file (~/.zshrc, ~/.bashrc), which is
     // where aliases and shell functions live. A startup command is written
     // by a human in their own config, so it routinely names one:
-    // `zsh -c 'tmuxon'` fails with "command not found" where
-    // `zsh -i -c 'tmuxon'` resolves the alias.
+    // `zsh -c 'll'` fails with "command not found" where
+    // `zsh -i -c 'll'` resolves the alias.
     //
     // `-l` sources the login profile (~/.zprofile, ~/.profile), which is
     // where PATH is usually assembled, including Homebrew's `shellenv`.
@@ -310,7 +310,7 @@ mod tests {
             listen: "0.0.0.0:9999".to_string(),
             allowed_logins: vec!["alice".to_string(), "bob".to_string()],
             shell: "/bin/zsh".to_string(),
-            default_cmd: "tmuxon".to_string(),
+            default_cmd: "tmux new -A -s main".to_string(),
             session_ttl_hours: 48,
             scrollback_bytes: 1024,
             max_sessions: 16,
@@ -356,9 +356,9 @@ mod tests {
 
     #[test]
     fn default_cmd_parses_from_toml() {
-        let toml = "shell = \"/bin/zsh\"\ndefault_cmd = \"tmuxon\"\n";
+        let toml = "shell = \"/bin/zsh\"\ndefault_cmd = \"tmux new -A -s main\"\n";
         let config: Config = toml::from_str(toml).expect("parse config with default_cmd");
-        assert_eq!(config.default_cmd, "tmuxon");
+        assert_eq!(config.default_cmd, "tmux new -A -s main");
     }
 
     // ---- command resolution ----
@@ -366,7 +366,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_command_prefers_attach_cmd() {
-        let (program, args) = resolve_command("/bin/zsh", "tmuxon", Some("htop"));
+        let (program, args) = resolve_command("/bin/zsh", "tmux new -A -s main", Some("htop"));
         assert_eq!(program, "/bin/zsh");
         assert_eq!(args, ["-l", "-i", "-c", "htop"]);
     }
@@ -374,9 +374,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_command_falls_back_to_default_cmd() {
-        let (program, args) = resolve_command("/bin/zsh", "tmuxon", None);
+        let (program, args) = resolve_command("/bin/zsh", "tmux new -A -s main", None);
         assert_eq!(program, "/bin/zsh");
-        assert_eq!(args, ["-l", "-i", "-c", "tmuxon"]);
+        assert_eq!(args, ["-l", "-i", "-c", "tmux new -A -s main"]);
     }
 
     #[cfg(unix)]
@@ -391,14 +391,14 @@ mod tests {
     #[test]
     fn resolve_command_treats_blank_as_absent() {
         // Blank ATTACH cmd falls through to default_cmd.
-        let (_, args) = resolve_command("/bin/zsh", "tmuxon", Some("   "));
-        assert_eq!(args, ["-l", "-i", "-c", "tmuxon"]);
+        let (_, args) = resolve_command("/bin/zsh", "tmux new -A -s main", Some("   "));
+        assert_eq!(args, ["-l", "-i", "-c", "tmux new -A -s main"]);
         // Blank default_cmd falls through to the plain shell.
         let (_, args) = resolve_command("/bin/zsh", "  \t ", None);
         assert_eq!(args, ["-l"]);
         // Surrounding whitespace is trimmed off a real command.
-        let (_, args) = resolve_command("/bin/zsh", "", Some(" tmuxon\n"));
-        assert_eq!(args, ["-l", "-i", "-c", "tmuxon"]);
+        let (_, args) = resolve_command("/bin/zsh", "", Some(" tmux new -A -s main\n"));
+        assert_eq!(args, ["-l", "-i", "-c", "tmux new -A -s main"]);
     }
 
     #[cfg(unix)]
@@ -406,7 +406,7 @@ mod tests {
     fn resolve_command_uses_the_configured_shell() {
         let config = Config {
             shell: "/usr/bin/fish".to_string(),
-            default_cmd: "tmuxon".to_string(),
+            default_cmd: "tmux new -A -s main".to_string(),
             ..Config::default()
         };
         assert_eq!(
@@ -417,7 +417,7 @@ mod tests {
                     "-l".to_string(),
                     "-i".to_string(),
                     "-c".to_string(),
-                    "tmuxon".to_string()
+                    "tmux new -A -s main".to_string()
                 ]
             )
         );

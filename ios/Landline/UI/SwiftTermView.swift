@@ -6,33 +6,74 @@ import os
 // MARK: - Terminal palette
 //
 // SwiftTerm wants `SwiftTerm.Color` (16-bit components) and `UIColor`, neither
-// of which is a SwiftUI `Color`, so this layer converts. The values themselves
-// are not restated: they come from Theme's packed hex, which is DESIGN.md's
-// "Terminal ANSI (One Dark Pro, exact)" table.
+// of which is a SwiftUI `Color`, so this layer converts. Palettes are stored as
+// packed 0xRRGGBB and converted on demand, which is what lets the picker draw a
+// scheme's own swatch strip in SwiftUI from the same numbers the emulator gets.
+//
+// Every hex below is transcribed from the scheme's own repository, not from
+// memory or from a screenshot. The source is cited on each palette, because the
+// audience for this app reads these colours all day and a wrong hex is the kind
+// of error that is noticed instantly and never forgiven. DESIGN.md's
+// "Terminal ANSI (One Dark Pro, exact)" table stays the default and is the only
+// one that also drives app chrome.
 
 struct TerminalPalette {
-    /// Exactly 16 entries: 8 normal then 8 bright, in ANSI order.
-    let ansi: [SwiftTerm.Color]
-    let foreground: UIColor
-    let background: UIColor
-    let cursor: UIColor
+    /// Exactly 16 packed 0xRRGGBB entries: 8 normal then 8 bright, in ANSI
+    /// order (black red green yellow blue magenta cyan white).
+    let ansiHexRGB: [UInt32]
+    let foregroundHexRGB: UInt32
+    let backgroundHexRGB: UInt32
+    let cursorHexRGB: UInt32
     /// Text colour under a block cursor.
-    let cursorText: UIColor?
-    let selection: UIColor
-    let selectionText: UIColor
+    let cursorTextHexRGB: UInt32
+    let selectionHexRGB: UInt32
+    let selectionTextHexRGB: UInt32
     /// Drives the keyboard appearance so the software keyboard does not flash
     /// white under a dark terminal.
     let isDark: Bool
 
-    /// The product default, straight off Theme.
+    init(
+        ansiHexRGB: [UInt32],
+        foreground: UInt32,
+        background: UInt32,
+        cursor: UInt32,
+        cursorText: UInt32,
+        selection: UInt32,
+        selectionText: UInt32,
+        isDark: Bool
+    ) {
+        self.ansiHexRGB = ansiHexRGB
+        self.foregroundHexRGB = foreground
+        self.backgroundHexRGB = background
+        self.cursorHexRGB = cursor
+        self.cursorTextHexRGB = cursorText
+        self.selectionHexRGB = selection
+        self.selectionTextHexRGB = selectionText
+        self.isDark = isDark
+    }
+
+    // Converted on demand rather than stored: `apply(palette:)` runs on attach
+    // and on a scheme change, not per frame, and keeping one representation
+    // means the picker and the emulator can never drift apart.
+    var ansi: [SwiftTerm.Color] { ansiHexRGB.map(SwiftTerm.Color.init(hexRGB:)) }
+    var foreground: UIColor { UIColor(hexRGB: foregroundHexRGB) }
+    var background: UIColor { UIColor(hexRGB: backgroundHexRGB) }
+    var cursor: UIColor { UIColor(hexRGB: cursorHexRGB) }
+    var cursorText: UIColor? { UIColor(hexRGB: cursorTextHexRGB) }
+    var selection: UIColor { UIColor(hexRGB: selectionHexRGB) }
+    var selectionText: UIColor { UIColor(hexRGB: selectionTextHexRGB) }
+
+    /// The product default, straight off Theme. This is the one palette that is
+    /// also the app's chrome, so it is the one DESIGN.md's contrast floor was
+    /// measured against.
     static let oneDarkPro = TerminalPalette(
-        ansi: Theme.ansiHexRGB.map(SwiftTerm.Color.init(hexRGB:)),
-        foreground: UIColor(hexRGB: Theme.terminalForegroundHexRGB),
-        background: UIColor(hexRGB: Theme.terminalBackgroundHexRGB),
-        cursor: UIColor(hexRGB: Theme.terminalCursorHexRGB),
-        cursorText: UIColor(hexRGB: Theme.terminalBackgroundHexRGB),
-        selection: UIColor(hexRGB: Theme.terminalSelectionHexRGB),
-        selectionText: UIColor(hexRGB: 0xD7DAE0),
+        ansiHexRGB: Theme.ansiHexRGB,
+        foreground: Theme.terminalForegroundHexRGB,
+        background: Theme.terminalBackgroundHexRGB,
+        cursor: Theme.terminalCursorHexRGB,
+        cursorText: Theme.terminalBackgroundHexRGB,
+        selection: Theme.terminalSelectionHexRGB,
+        selectionText: 0xD7DAE0,
         isDark: true
     )
 
@@ -40,25 +81,193 @@ struct TerminalPalette {
     /// light appearance. One Light is One Dark Pro's own sibling scheme, so the
     /// hues stay the ones the owner already reads.
     static let oneLight = TerminalPalette(
-        ansi: ([
+        ansiHexRGB: [
             0xFAFAFA, 0xE45649, 0x50A14F, 0xC18401, 0x4078F2, 0xA626A4, 0x0184BC, 0x383A42,
             0xA0A1A7, 0xE45649, 0x50A14F, 0xC18401, 0x4078F2, 0xA626A4, 0x0184BC, 0x000000,
-        ] as [UInt32]).map(SwiftTerm.Color.init(hexRGB:)),
-        foreground: UIColor(hexRGB: 0x383A42),
-        background: UIColor(hexRGB: 0xFAFAFA),
-        cursor: UIColor(hexRGB: 0x526FFF),
-        cursorText: UIColor(hexRGB: 0xFAFAFA),
-        selection: UIColor(hexRGB: 0xD0D0D0),
-        selectionText: UIColor(hexRGB: 0x383A42),
+        ],
+        foreground: 0x383A42,
+        background: 0xFAFAFA,
+        cursor: 0x526FFF,
+        cursorText: 0xFAFAFA,
+        selection: 0xD0D0D0,
+        selectionText: 0x383A42,
         isDark: false
     )
 
-    /// Resolves what a host actually renders in. Anything that is not
-    /// `matchSystem` is One Dark Pro, which PRODUCT.md pins as the default.
+    /// Catppuccin Mocha, from the project's own kitty port:
+    /// https://github.com/catppuccin/kitty `themes/mocha.conf`.
+    /// (`catppuccin/alacritty`'s `catppuccin-mocha.toml` agrees colour for
+    /// colour, so the ANSI mapping is not one port's opinion.)
+    static let catppuccinMocha = TerminalPalette(
+        ansiHexRGB: [
+            0x45475A, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xBAC2DE,
+            0x585B70, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xA6ADC8,
+        ],
+        foreground: 0xCDD6F4,
+        background: 0x1E1E2E,
+        cursor: 0xF5E0DC,
+        cursorText: 0x1E1E2E,
+        selection: 0xF5E0DC,
+        selectionText: 0x1E1E2E,
+        isDark: true
+    )
+
+    /// Tokyo Night, from https://github.com/folke/tokyonight.nvim
+    /// `extras/kitty/tokyonight_night.conf`, which is the upstream the
+    /// tokyo-night-vscode-theme README points terminals at. Verified against
+    /// the owner's own configuration for the normal eight and fg/bg.
+    static let tokyoNight = TerminalPalette(
+        ansiHexRGB: [
+            0x15161E, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6,
+            0x414868, 0xFF899D, 0x9FE044, 0xFABA4A, 0x8DB0FF, 0xC7A9FF, 0xA4DAFF, 0xC0CAF5,
+        ],
+        foreground: 0xC0CAF5,
+        background: 0x1A1B26,
+        cursor: 0xC0CAF5,
+        cursorText: 0x1A1B26,
+        selection: 0x283457,
+        selectionText: 0xC0CAF5,
+        isDark: true
+    )
+
+    /// Gruvbox Dark, from morhetz's own terminal distribution:
+    /// https://github.com/morhetz/gruvbox-contrib `xresources/gruvbox-dark.xresources`
+    /// (its `termite/gruvbox-dark` and `konsole/Gruvbox_dark.colorscheme` are
+    /// identical). Gruvbox publishes no terminal cursor or selection, so both
+    /// come from `morhetz/gruvbox`'s own `colors/gruvbox.vim`: `Visual` is
+    /// `bg3` (`dark3` `#665C54`) and `Cursor` is `inverse`, i.e. the
+    /// foreground.
+    static let gruvboxDark = TerminalPalette(
+        ansiHexRGB: [
+            0x282828, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,
+            0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2,
+        ],
+        foreground: 0xEBDBB2,
+        background: 0x282828,
+        cursor: 0xEBDBB2,
+        cursorText: 0x282828,
+        selection: 0x665C54,
+        selectionText: 0xEBDBB2,
+        isDark: true
+    )
+
+    /// Dracula, from the project's own kitty port:
+    /// https://github.com/dracula/kitty `dracula.conf`.
+    static let dracula = TerminalPalette(
+        ansiHexRGB: [
+            0x21222C, 0xFF5555, 0x50FA7B, 0xF1FA8C, 0xBD93F9, 0xFF79C6, 0x8BE9FD, 0xF8F8F2,
+            0x6272A4, 0xFF6E6E, 0x69FF94, 0xFFFFA5, 0xD6ACFF, 0xFF92DF, 0xA4FFFF, 0xFFFFFF,
+        ],
+        foreground: 0xF8F8F2,
+        background: 0x282A36,
+        cursor: 0xF8F8F2,
+        cursorText: 0x282A36,
+        selection: 0x44475A,
+        selectionText: 0xFFFFFF,
+        isDark: true
+    )
+
+    /// Nord, from the Nord org's own terminal port:
+    /// https://github.com/nordtheme/alacritty `src/nord.yaml`. Its selection
+    /// text is `CellForeground`, which this renderer has no equivalent for, so
+    /// the foreground is named explicitly.
+    static let nord = TerminalPalette(
+        ansiHexRGB: [
+            0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x88C0D0, 0xE5E9F0,
+            0x4C566A, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x8FBCBB, 0xECEFF4,
+        ],
+        foreground: 0xD8DEE9,
+        background: 0x2E3440,
+        cursor: 0xD8DEE9,
+        cursorText: 0x2E3440,
+        selection: 0x4C566A,
+        selectionText: 0xD8DEE9,
+        isDark: true
+    )
+
+    /// Solarized Dark, from Ethan Schoonover's own
+    /// https://github.com/altercation/solarized `xresources/solarized`, which
+    /// is the canonical 16-colour mapping (and the reason `color8` is darker
+    /// than `color0`: Solarized spends half the bright range on greys). That
+    /// file has no selection, so selection is the documented highlighted-
+    /// background pair from the Solarized README, `base02` on `base1`.
+    static let solarizedDark = TerminalPalette(
+        ansiHexRGB: [
+            0x073642, 0xDC322F, 0x859900, 0xB58900, 0x268BD2, 0xD33682, 0x2AA198, 0xEEE8D5,
+            0x002B36, 0xCB4B16, 0x586E75, 0x657B83, 0x839496, 0x6C71C4, 0x93A1A1, 0xFDF6E3,
+        ],
+        foreground: 0x839496,
+        background: 0x002B36,
+        cursor: 0x93A1A1,
+        cursorText: 0x002B36,
+        selection: 0x073642,
+        selectionText: 0x93A1A1,
+        isDark: true
+    )
+
+    /// Rosé Pine, from the project's own kitty port:
+    /// https://github.com/rose-pine/kitty `dist/rose-pine.conf`. Rosé Pine
+    /// ships no separate bright ramp beyond `iris`/`muted`, so six of its eight
+    /// bright entries repeat the normal ones; that repetition is the scheme,
+    /// not a gap in the transcription.
+    static let rosePine = TerminalPalette(
+        ansiHexRGB: [
+            0x26233A, 0xEB6F92, 0x31748F, 0xF6C177, 0x9CCFD8, 0xC4A7E7, 0xEBBCBA, 0xE0DEF4,
+            0x6E6A86, 0xEB6F92, 0x31748F, 0xF6C177, 0x9CCFD8, 0xC4A7E7, 0xEBBCBA, 0xE0DEF4,
+        ],
+        foreground: 0xE0DEF4,
+        background: 0x191724,
+        cursor: 0x524F67,
+        cursorText: 0xE0DEF4,
+        selection: 0x403D52,
+        selectionText: 0xE0DEF4,
+        isDark: true
+    )
+
+    /// Catppuccin Latte, from https://github.com/catppuccin/kitty
+    /// `themes/latte.conf`. The kitty port rather than the alacritty one on
+    /// purpose: `catppuccin/alacritty`'s `catppuccin-latte.toml` puts `surface1`
+    /// at ANSI black and `subtext1` at ANSI white, which on a `#EFF1F5` ground
+    /// makes black text nearly invisible. Kitty's mapping keeps black dark,
+    /// which is what a light terminal has to do.
+    static let catppuccinLatte = TerminalPalette(
+        ansiHexRGB: [
+            0x5C5F77, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0xACB0BE,
+            0x6C6F85, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0xBCC0CC,
+        ],
+        foreground: 0x4C4F69,
+        background: 0xEFF1F5,
+        cursor: 0xDC8A78,
+        cursorText: 0xEFF1F5,
+        selection: 0xDC8A78,
+        selectionText: 0xEFF1F5,
+        isDark: false
+    )
+
+    /// What `matchSystem` paints when the phone is in light appearance.
+    ///
+    /// One Light, not Catppuccin Latte, and the reason is the pairing rather
+    /// than the palette: `matchSystem`'s dark half is One Dark Pro, and One
+    /// Light is that scheme's own sibling, so following the system changes the
+    /// ground without changing the hues the owner reads. Latte is a first-class
+    /// choice in its own right for anyone who wants a light terminal outright;
+    /// swapping this one constant is all it would take to make it the system
+    /// light half instead.
+    static let matchSystemLight = oneLight
+
+    /// Resolves what a host actually renders in.
     static func resolve(scheme: TerminalColorScheme, systemIsLight: Bool) -> TerminalPalette {
         switch scheme {
-        case .matchSystem: return systemIsLight ? .oneLight : .oneDarkPro
+        case .matchSystem: return systemIsLight ? .matchSystemLight : .oneDarkPro
         case .oneDarkPro: return .oneDarkPro
+        case .catppuccinMocha: return .catppuccinMocha
+        case .tokyoNight: return .tokyoNight
+        case .gruvboxDark: return .gruvboxDark
+        case .dracula: return .dracula
+        case .nord: return .nord
+        case .solarizedDark: return .solarizedDark
+        case .rosePine: return .rosePine
+        case .catppuccinLatte: return .catppuccinLatte
         }
     }
 }
@@ -401,31 +610,6 @@ final class TerminalController {
 
     /// Resolved appearance in, exactly like `apply(palette:)`: the screen owns
     /// the decision, this owns the UIKit consequences.
-    /// The family the terminal is *actually* drawing in, after every fallback
-    /// in `TerminalFont` has had its say.
-    ///
-    /// Recorded rather than assumed: this font path has now shipped two bugs
-    /// where the app believed one face was in use and the screen showed
-    /// another, and neither was visible without reading letterforms off a
-    /// photograph. Surfaced in the header so the answer is on screen.
-    private(set) var resolvedFontFamily: String = ""
-
-    /// What the view asked for, kept beside what it got. If these disagree the
-    /// bug is upstream (stale state, wrong row) rather than in font
-    /// resolution; if they agree and the screen still looks wrong, the font
-    /// resolved by name but drew from somewhere else.
-    private(set) var requestedFontFamily: String = ""
-
-    /// Whether the resolved primary face can actually draw plain ASCII.
-    /// A font granted by name but without accessible glyph data cascades every
-    /// character to the fallback, which looks exactly like the wrong font
-    /// being applied.
-    private(set) var primaryHasGlyphs = true
-
-    /// The face CoreText picks to draw a digit. Differs from
-    /// `resolvedFontFamily` exactly when the cascade is doing the drawing.
-    private(set) var drawingFontFamily = ""
-
     func apply(fontFamily: String, size: CGFloat) {
         // Recorded even with no view attached, so the family survives the gap
         // between a SwiftUI update and `makeUIView`.
@@ -442,12 +626,6 @@ final class TerminalController {
         // lines do not fall back to a proportional face.
         let normal = TerminalFont.font(family: fontFamily, size: size, bold: false)
         let bold = TerminalFont.font(family: fontFamily, size: size, bold: true)
-        resolvedFontFamily = normal.familyName
-        requestedFontFamily = fontFamily.isEmpty ? "BUNDLED" : fontFamily
-        primaryHasGlyphs = TerminalFont.canDrawASCII(normal)
-        // Which face actually draws a digit, asked of CoreText rather than
-        // inferred from the composed font's name.
-        drawingFontFamily = TerminalFont.drawingFamily(for: "0", in: normal)
         view.setFonts(
             normal: normal,
             bold: bold,
@@ -465,7 +643,7 @@ final class TerminalController {
 /// The problem this type exists to solve: a font installed through an iOS
 /// configuration profile (iFont and friends) registers system-wide, so
 /// `UIFont(name:)` can see it from any app — but almost none of those fonts are
-/// Nerd Font patched. Berkeley Mono is not. Handing SwiftTerm a bare
+/// Nerd Font patched. Most side-loaded faces are not. Handing SwiftTerm a bare
 /// `UIFont(name: "BerkeleyMono", ...)` therefore brings the tofu bug straight
 /// back: starship, powerlevel10k and every patched vim theme draw their icons
 /// out of the Private Use Area, which an unpatched font has no glyphs for.
@@ -629,7 +807,7 @@ enum TerminalFont {
         // Those never appear in ANY enumeration API on iOS, so asking
         // `fontNames(forFamilyName:)` alone reports a perfectly working,
         // already-granted font as missing. It is what made the picker say
-        // "NOT INSTALLED" about Berkeley Mono in the same breath as
+        // "NOT INSTALLED" about a profile-installed font in the same breath as
         // confirming it was available, and worse, it made the terminal fall
         // back to the bundled face. Instantiating is the only honest test.
         guard let font = UIFont(name: family, size: probeSize) else { return false }
@@ -643,7 +821,7 @@ enum TerminalFont {
     // The assumption this section used to make — that a font installed through
     // a configuration profile lands in `UIFont.familyNames` like any other — is
     // wrong, and it is the reason build 2 showed the owner only Courier New and
-    // Menlo on a phone that has Berkeley Mono installed. CoreText says so
+    // Menlo on a phone with a profile-installed font. CoreText says so
     // outright (CTFontManager.h, `CTFontManagerRequestFonts`):
     //
     //   "On iOS, fonts registered by font provider applications in the
@@ -673,9 +851,9 @@ enum TerminalFont {
 
     /// How many candidate families each enumeration source returned.
     ///
-    /// Printed verbatim in the picker. When a side-loaded font does not show up
-    /// the first useful question is which API can see it at all, and until this
-    /// existed nobody — owner or developer — had that number.
+    /// Not shown to anyone: the union below has to ask three different APIs
+    /// because each of them can see a font the others cannot, and counting them
+    /// separately is what lets a test prove all three are still being asked.
     struct EnumerationCensus: Equatable {
         /// `UIFont.familyNames`.
         var system = 0
@@ -683,9 +861,6 @@ enum TerminalFont {
         var available = 0
         /// `CTFontManagerCopyRegisteredFontDescriptors(.persistent, true)`.
         var registered = 0
-
-        /// Micro-caps, one line, tabular. Reads as instrument silkscreen.
-        var line: String { "SYSTEM \(system) / AVAILABLE \(available) / REGISTERED \(registered)" }
     }
 
     /// A family name plus whether the phone can draw it yet.
@@ -966,40 +1141,6 @@ enum TerminalFont {
     /// Whether a family covers the Private Use Area codepoints a prompt draws.
     /// Only the bundled face is expected to; the answer is what the picker uses
     /// to tell the truth about a chosen font rather than to guess.
-    /// Whether a font can draw plain ASCII from its own glyph table.
-    ///
-    /// A font that resolves by name but carries no accessible glyphs reports a
-    /// perfectly good family name while every character it is asked for falls
-    /// through the cascade to the fallback face. On screen that is
-    /// indistinguishable from the wrong font being selected.
-    /// The font CoreText actually selects to draw `sample` with `font`.
-    ///
-    /// This is the only honest answer to "which face is on screen". A font
-    /// composed with a cascade list reports its own family name even when the
-    /// primary carries no glyphs and every character is being drawn by the
-    /// fallback, which is indistinguishable from the wrong font being applied.
-    static func drawingFamily(for sample: String, in font: UIFont) -> String {
-        let attributed = NSAttributedString(string: sample, attributes: [.font: font])
-        let line = CTLineCreateWithAttributedString(attributed)
-        guard let runs = CTLineGetGlyphRuns(line) as? [CTRun], let first = runs.first else {
-            return font.familyName
-        }
-        let attrs = CTRunGetAttributes(first) as NSDictionary
-        guard let runFont = attrs[kCTFontAttributeName as String] else { return font.familyName }
-        return CTFontCopyFamilyName(runFont as! CTFont) as String
-    }
-
-    static func canDrawASCII(_ font: UIFont) -> Bool {
-        let ctFont = font as CTFont
-        for scalar in ["0", "A", "m"].compactMap({ $0.unicodeScalars.first }) {
-            var chars = Array(String(scalar).utf16)
-            var glyphs = [CGGlyph](repeating: 0, count: chars.count)
-            let ok = CTFontGetGlyphsForCharacters(ctFont, &chars, &glyphs, chars.count)
-            if !ok || glyphs.first == 0 { return false }
-        }
-        return true
-    }
-
     static func hasPromptIcons(family: String) -> Bool {
         guard let name = UIFont.fontNames(forFamilyName: family).first,
               let font = UIFont(name: name, size: probeSize) else { return false }
@@ -1076,7 +1217,7 @@ enum TerminalFont {
     /// `selected` is included even when it is no longer installed, so a removed
     /// profile shows up as a named, recoverable state instead of the setting
     /// appearing to have reset itself.
-    static func picker(selected: String = "") -> (list: [Option], census: EnumerationCensus) {
+    static func options(selected: String = "") -> [Option] {
         var options: [Option] = [
             Option(family: bundledFamilySentinel,
                    displayName: bundledDisplayName,
@@ -1084,8 +1225,7 @@ enum TerminalFont {
                    isMissing: false,
                    needsAccess: false)
         ]
-        let (found, census) = candidates()
-        var rows = found
+        var rows = candidates().list
         let trimmed = selected.trimmingCharacters(in: .whitespaces)
         let missing = !trimmed.isEmpty
             && !rows.contains { $0.family == trimmed }
@@ -1102,13 +1242,7 @@ enum TerminalFont {
                                   isMissing: isMissing,
                                   needsAccess: needsAccess))
         }
-        return (options, census)
-    }
-
-    /// The picker rows without the census, for the callers that only wanted
-    /// the list.
-    static func options(selected: String = "") -> [Option] {
-        picker(selected: selected).list
+        return options
     }
 
     // MARK: Size

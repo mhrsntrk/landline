@@ -190,12 +190,12 @@ final class Connection {
         // URLSessionWebSocketTask queues sends until the handshake completes,
         // so ATTACH can go out immediately. It MUST be the first frame.
         state = .attaching
-        // An empty startCommand means "use whatever this machine defaults to",
-        // which the daemon resolves from its own default_cmd.
-        let startCommand = host.startCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The startup command is written as steps and sent as one `&&`-joined
+        // string; nil means "use whatever this machine defaults to", which the
+        // daemon resolves from its own default_cmd and then from the shell.
         let attach = AttachReq(
             sessionID: resumeSessionID,
-            cmd: startCommand.isEmpty ? nil : startCommand,
+            cmd: StartupChain.command(host.startCommand),
             cols: cols,
             rows: rows
         )

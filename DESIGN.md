@@ -22,6 +22,21 @@ One Dark Pro, used verbatim so the phone matches the desktops. Strategy: **Restr
 the only accent, reserved for the current selection, primary actions, and focus. Semantic color
 comes from the terminal palette itself, never invented.
 
+### Chrome is One Dark Pro. Only the terminal is themed.
+
+A host can render its terminal in any of the shipped schemes (Catppuccin Mocha, Tokyo Night,
+Gruvbox Dark, Dracula, Nord, Solarized Dark, Rosé Pine, Catppuccin Latte), each transcribed from
+its own repository and cited in `TerminalPalette`. **None of that touches the app.** The chrome
+tokens below, and the contrast floor measured against them, are calibrated for the One Dark Pro
+ground; re-deriving an accessible chrome palette per scheme is a different and much larger piece
+of work, and a half-derived one would put annotation under the readable floor in exactly the bad
+light this app is used in. So the bars, sheets, rules, labels, and the accent stay One Dark Pro
+whatever the terminal is set to, and a scheme appears in the chrome only as a **specimen**: a
+swatch strip printed on its own ground, never as a surface the app paints itself with.
+
+The one setting that reaches past the terminal is `matchSystem`, and only as far as the software
+keyboard: a palette carries `isDark` so the keyboard does not flash white under a dark terminal.
+
 ### Chrome tokens
 | Token | Hex | Use |
 |---|---|---|
@@ -45,8 +60,19 @@ Normal: `#282C34` `#E06C75` `#98C379` `#E5C07B` `#61AFEF` `#C678DD` `#56B6C2` `#
 Bright: `#5C6370` `#E06C75` `#98C379` `#E5C07B` `#61AFEF` `#C678DD` `#56B6C2` `#FFFFFF`
 Foreground `#ABB2BF`, background `#282C34`, cursor `#528BFF`, selection `#3E4451`.
 
+This is the default and the only palette that is also the chrome. The other schemes live in
+`TerminalPalette` with the repository each was transcribed from cited on it, because the audience
+reads these colours every day and one wrong hex is noticed instantly. The rules for adding one:
+take all sixteen ANSI values plus foreground, background, cursor, and selection from the scheme's
+own project, prefer the project's own terminal port over a third-party one, and where a project
+publishes no distinct bright ramp, ship the values its own terminal configs ship rather than
+inventing a brighter set. Repetition between the ramps is the scheme, not an omission.
+
 Dark is not a category default here. It is forced by the scene: this app is opened in bed, on a
-night train, and beside a sleeping person. A light ground would be hostile.
+night train, and beside a sleeping person. A light ground would be hostile. Catppuccin Latte is
+in the list anyway, for bright sunlight, and it is the only light scheme a user can pick outright;
+`matchSystem` resolves to One Light in light appearance, because One Light is One Dark Pro's own
+sibling and following the system should change the ground without changing the hues.
 
 ## Contrast floor, measured not estimated
 

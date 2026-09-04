@@ -155,7 +155,7 @@ pub struct AttachArgs {
     /// the program and argv actually spawned).
     pub program: String,
     /// argv for `program`, e.g. `["-l"]` for a plain login shell or
-    /// `["-i", "-c", "tmuxon"]` for a startup command.
+    /// `["-i", "-c", "tmux new -A -s main"]` for a startup command.
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub cols: u16,

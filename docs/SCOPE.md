@@ -281,7 +281,7 @@ TOML, at `~/.config/landline/config.toml`, `~/Library/Application Support/landli
 listen            = "127.0.0.1:7777"   # loopback TCP; see 4.3 on why not a unix socket
 allowed_logins    = ["you@example.com"]
 shell             = ""                  # empty = $SHELL; on Windows pwsh, then powershell.exe
-default_cmd       = ""                  # e.g. "tmuxon"; runs as `$SHELL -i -c`, so aliases resolve
+default_cmd       = ""                  # e.g. "tmux new -A -s main"; runs as `$SHELL -i -c`, so aliases resolve
 session_ttl_hours = 24
 scrollback_bytes  = 262144
 max_sessions      = 8

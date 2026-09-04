@@ -45,7 +45,7 @@ each step.
 A command from either source is not executed directly, it is handed to the resolved shell
 in interactive mode: `<shell> -i -c "<cmd>"` on Unix. Interactive mode is what sources the
 rc files, so aliases, shell functions, and rc-file `PATH` entries resolve exactly as they
-do in a terminal (`"cmd": "tmuxon"` works when `tmuxon` is a shell alias; without `-i` it
+do in a terminal (`"cmd": "ll"` works when `ll` is a shell alias; without `-i` it
 would fail with "command not found"). On Windows, PowerShell has no `-i`, so pwsh and
 powershell get `-NoExit -Command "<cmd>"` and cmd.exe gets `/K "<cmd>"`, both of which run
 the command and leave the user at a prompt.
