@@ -710,11 +710,12 @@ enum DemoSeed {
     /// changed between the two stills is proof the daemon was told.
     static var togglesIndex: Bool { mode == "resize" || mode == "liveresize" }
 
-    /// Debug hook: seed a first host pointing at a `landlined` built with the
-    /// `harness` feature and running on this machine, so a screenshot can hold
-    /// a real attached session instead of a CLOSED band. Deliberately not port
-    /// 7777: that is where a real daemon listens, and a screenshot run has no
-    /// business connecting to it.
+    /// Debug hook: park the run on a session that is genuinely attached rather
+    /// than on a CLOSED band. The seed prints a tailnet name either way; where
+    /// it dials is `LANDLINE_DEMO_ENDPOINT` (see `Host.demoEndpoint`), which a
+    /// screenshot run points at a `landlined` built with the `harness` feature.
+    /// Deliberately never 7777: that is where a real daemon listens, and a
+    /// screenshot run has no business connecting to it.
     static var seedsLiveHost: Bool {
         mode == "live" || mode == "liveresize" || mode == "liveleader" || switchesHosts
     }
@@ -797,12 +798,13 @@ enum DemoSeed {
         one.useTLS = !showsValidation
         // A live run starts tmux for real, because tmux redrawing itself is the
         // half of the resize path that lives on the far end.
-        // The index frames drop it: the row prints the whole command as a flag,
-        // and at phone width that pushes the endpoint into a head-truncated
-        // stub, which is two ellipses on one line and reads as a broken layout
-        // rather than as a machine.
-        one.startCommand = seedsLiveHost ? "tmux new -A -s landline"
-            : (extraHosts.isEmpty ? "tmux new -A -s main" : "")
+        // `index` alone drops it: that frame is the index itself, the row prints
+        // the whole command as a flag, and at phone width that pushes the
+        // endpoint into a head-truncated stub, which is two ellipses on one line
+        // and reads as a broken layout rather than as a machine. `fullindex` is
+        // the same seed with the command kept, for the preview video, which
+        // starts on the index and then opens the session for real.
+        one.startCommand = mode == "index" ? "" : "tmux new -A -s landline"
         one.leaderKey = "C-a"
         one.lastShell = "/bin/zsh"
         one.lastAttachedAt = Date().addingTimeInterval(-14 * 60)

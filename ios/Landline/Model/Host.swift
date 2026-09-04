@@ -169,16 +169,16 @@ struct Host: Codable, Identifiable, Hashable {
     /// listing for a Tailscale client that advertises `127.0.0.1:7788` is
     /// telling the reader the wrong thing about the product. The session behind
     /// it still has to be real, and the only daemon a simulator can reach is
-    /// the harness one on this machine. So `LANDLINE_DEMO_ENDPOINT=host:port`
-    /// redirects every connection there, in plain ws, while the model keeps the
-    /// name it displays. Compiled out of release, and inert without the
-    /// variable, so a real install can never be redirected anywhere.
+    /// the harness one on this machine. So
+    /// `LANDLINE_DEMO_ENDPOINT=studio.tail4f1a.ts.net@127.0.0.1:7788` sends that
+    /// one host's connection to the harness daemon, in plain ws, while the model
+    /// keeps the name it displays.
     ///
-    /// The variable names the host it applies to
-    /// (`LANDLINE_DEMO_ENDPOINT=studio.tail4f1a.ts.net@127.0.0.1:7788`) rather
-    /// than redirecting everything, because the index probes every row for
-    /// reachability and a blanket redirect would draw a filled status square on
-    /// machines that do not exist.
+    /// It names the host it applies to rather than redirecting everything,
+    /// because the index probes every row for reachability and a blanket
+    /// redirect would draw a filled status square on machines that do not
+    /// exist. Compiled out of release, and inert without the variable, so a
+    /// real install can never be redirected anywhere.
     private var demoEndpoint: (host: String, port: Int)? {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["LANDLINE_DEMO_ENDPOINT"],
