@@ -248,6 +248,14 @@ struct HostLeaderView: View {
             proseText("The tmux prefix this machine is configured with. `LDR` in the key bar arms it, and whatever you press next, from the bar or from the keyboard, is sent straight after it.")
                 .llProse()
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, Theme.Metric.grid * 2)
+
+            // The failure this prevents is silent: send a prefix the far end
+            // does not use and tmux simply ignores the byte, so the leader key
+            // appears to do nothing at all.
+            proseText("It has to match the machine. If your `.tmux.conf` says `set -g prefix C-a`, choose `C-a` here. A prefix tmux is not listening for is discarded without a word.")
+                .llProse()
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, Theme.Metric.grid * 3)
 
             VStack(spacing: 0) {

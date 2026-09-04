@@ -519,3 +519,32 @@ final class KeySequenceLeaderTests: XCTestCase {
         XCTAssertNil(KeySequence.bytes("\\Lc\\q", leaderByte: 0x01))
     }
 }
+
+/// The owner reported "leader + d does not detach". The wire bytes are the
+/// first thing to rule out: tmux only acts on its configured prefix, and this
+/// app defaults to tmux's own C-b while his config sets C-a and unbinds C-b,
+/// so a host left on the default sends a byte his tmux ignores entirely.
+final class LeaderDetachTests: XCTestCase {
+    func testLeaderPlusDSendsThePrefixThenTheKey() {
+        var latches = LatchState()
+        latches.leader = true
+        let out = latches.consume([UInt8(ascii: "d")], leaderByte: LeaderKey.byte(for: "C-a"))
+        XCTAssertEqual(out, [0x01, 0x64], "C-a leader then d must be 01 64")
+    }
+
+    /// The failure mode, spelled out: correct code, wrong prefix.
+    func testTheDefaultPrefixSendsAByteThatATmuxUsingCASimplyIgnores() {
+        XCTAssertEqual(LeaderKey.byte(for: LeaderKey.default), 0x02, "app default is tmux's C-b")
+        XCTAssertEqual(LeaderKey.byte(for: "C-a"), 0x01)
+        XCTAssertNotEqual(
+            LeaderKey.byte(for: LeaderKey.default), LeaderKey.byte(for: "C-a"),
+            "a host left on the default cannot drive a tmux whose prefix is C-a"
+        )
+    }
+
+    func testLeaderIsCountedAsArmed() {
+        var latches = LatchState()
+        latches.leader = true
+        XCTAssertTrue(latches.isAnyArmed, "sendUserInput skips consume entirely when this is false")
+    }
+}
