@@ -218,7 +218,13 @@ struct TerminalScreen: View {
         // the screen drew another, neither visible except by reading
         // letterforms off a photograph.
         if !controller.resolvedFontFamily.isEmpty {
-            parts.append(controller.resolvedFontFamily.uppercased())
+            // Requested beside applied, plus whether the applied face can draw
+            // ASCII at all. Three facts instead of one, because a single name
+            // could not distinguish stale state from a font that resolves but
+            // has no glyphs.
+            parts.append("REQ " + controller.requestedFontFamily.uppercased())
+            parts.append("GOT " + controller.resolvedFontFamily.uppercased())
+            if !controller.primaryHasGlyphs { parts.append("NO GLYPHS") }
         }
         return parts.joined(separator: " / ")
     }

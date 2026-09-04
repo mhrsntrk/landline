@@ -410,6 +410,18 @@ final class TerminalController {
     /// photograph. Surfaced in the header so the answer is on screen.
     private(set) var resolvedFontFamily: String = ""
 
+    /// What the view asked for, kept beside what it got. If these disagree the
+    /// bug is upstream (stale state, wrong row) rather than in font
+    /// resolution; if they agree and the screen still looks wrong, the font
+    /// resolved by name but drew from somewhere else.
+    private(set) var requestedFontFamily: String = ""
+
+    /// Whether the resolved primary face can actually draw plain ASCII.
+    /// A font granted by name but without accessible glyph data cascades every
+    /// character to the fallback, which looks exactly like the wrong font
+    /// being applied.
+    private(set) var primaryHasGlyphs = true
+
     func apply(fontFamily: String, size: CGFloat) {
         // Recorded even with no view attached, so the family survives the gap
         // between a SwiftUI update and `makeUIView`.
@@ -427,6 +439,8 @@ final class TerminalController {
         let normal = TerminalFont.font(family: fontFamily, size: size, bold: false)
         let bold = TerminalFont.font(family: fontFamily, size: size, bold: true)
         resolvedFontFamily = normal.familyName
+        requestedFontFamily = fontFamily.isEmpty ? "BUNDLED" : fontFamily
+        primaryHasGlyphs = TerminalFont.canDrawASCII(normal)
         view.setFonts(
             normal: normal,
             bold: bold,
@@ -945,6 +959,23 @@ enum TerminalFont {
     /// Whether a family covers the Private Use Area codepoints a prompt draws.
     /// Only the bundled face is expected to; the answer is what the picker uses
     /// to tell the truth about a chosen font rather than to guess.
+    /// Whether a font can draw plain ASCII from its own glyph table.
+    ///
+    /// A font that resolves by name but carries no accessible glyphs reports a
+    /// perfectly good family name while every character it is asked for falls
+    /// through the cascade to the fallback face. On screen that is
+    /// indistinguishable from the wrong font being selected.
+    static func canDrawASCII(_ font: UIFont) -> Bool {
+        let ctFont = font as CTFont
+        for scalar in ["0", "A", "m"].compactMap({ $0.unicodeScalars.first }) {
+            var chars = Array(String(scalar).utf16)
+            var glyphs = [CGGlyph](repeating: 0, count: chars.count)
+            let ok = CTFontGetGlyphsForCharacters(ctFont, &chars, &glyphs, chars.count)
+            if !ok || glyphs.first == 0 { return false }
+        }
+        return true
+    }
+
     static func hasPromptIcons(family: String) -> Bool {
         guard let name = UIFont.fontNames(forFamilyName: family).first,
               let font = UIFont(name: name, size: probeSize) else { return false }
