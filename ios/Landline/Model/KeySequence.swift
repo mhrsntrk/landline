@@ -184,33 +184,116 @@ struct LatchState: Equatable {
 /// anything it cannot resolve.
 ///
 /// A custom key that silently sends the wrong bytes is worse than no custom key
-/// at all, so this parser has exactly two outcomes — a byte string, or a
-/// sentence saying what is wrong with what was typed — and the editor will not
-/// save a key that produced the second one.
+/// at all, so this parser has exactly two outcomes — a template, or a sentence
+/// saying what is wrong with what was typed — and the editor will not save a key
+/// that produced the second one.
+///
+/// A *template* rather than bytes, because of `\L`. The bytes a sequence stands
+/// for are no longer fixed when it is written: `\Lc` means "this host's tmux
+/// prefix, then c", and which byte that is depends on the machine the key is
+/// pressed against. The layout is app-wide and the leader is per host, so the
+/// two can only meet at send time.
 enum KeySequence {
     struct ParseError: Error, Equatable {
         /// Problem plus recovery, in one sentence a human wrote.
         let message: String
     }
 
+    /// One run of a parsed sequence: bytes that are already known, or the slot
+    /// the host's leader byte drops into.
+    enum Segment: Equatable, Hashable {
+        case bytes([UInt8])
+        case leader
+    }
+
+    /// A parsed sequence, still waiting for the one fact it cannot know on its
+    /// own. A template with no `.leader` in it is a fixed byte string and
+    /// resolves against no host at all, which is what every sequence written
+    /// before `\L` existed is.
+    struct Template: Equatable, Hashable {
+        let segments: [Segment]
+
+        /// A fixed byte string. What the catalog's own keys are built from.
+        init(_ bytes: [UInt8]) {
+            segments = bytes.isEmpty ? [] : [.bytes(bytes)]
+        }
+
+        /// Adjacent byte runs are expected to be coalesced by the parser, so two
+        /// templates that mean the same thing compare equal.
+        init(segments: [Segment]) {
+            self.segments = segments
+        }
+
+        var isEmpty: Bool { segments.isEmpty }
+
+        /// True when this cannot be turned into bytes without a host.
+        var needsLeader: Bool { segments.contains(.leader) }
+
+        /// How many bytes this puts on the wire. The leader is exactly one byte
+        /// whichever prefix a host is set to, so it can be counted before it is
+        /// known.
+        var byteCount: Int {
+            segments.reduce(0) { total, segment in
+                switch segment {
+                case .bytes(let bytes): return total + bytes.count
+                case .leader: return total + 1
+                }
+            }
+        }
+
+        /// The bytes, or nil when this needs a leader and the host has none.
+        ///
+        /// Nil rather than a guess: a host whose stored notation does not
+        /// resolve has no prefix, and sending tmux's default `C-b` at it would
+        /// be the silent wrong-byte failure this whole file exists to prevent.
+        /// The key is drawn disabled instead, exactly as `LDR` already is.
+        func resolve(leaderByte: UInt8?) -> [UInt8]? {
+            var out: [UInt8] = []
+            for segment in segments {
+                switch segment {
+                case .bytes(let bytes):
+                    out.append(contentsOf: bytes)
+                case .leader:
+                    guard let leaderByte else { return nil }
+                    out.append(leaderByte)
+                }
+            }
+            return out
+        }
+    }
+
+    /// What the readout prints where the leader byte will go. Micro-caps, and
+    /// the same three letters the bar's own latch key wears, so the slot in a
+    /// hex string is read as the key it stands for.
+    static let leaderSymbol = "LDR"
+
     /// The whole syntax, in the order the editor prints it.
     static let syntaxRows: [(token: String, meaning: String)] = [
         ("abc", "Sent as itself, one byte per ASCII character."),
         ("^X", "The control byte for X. `^C` is 0x03, `^?` is 0x7F."),
         ("\\e", "Escape, 0x1B. `\\e[A` is the up arrow."),
+        ("\\L", "This host's tmux leader byte. `\\Lc` is the prefix, then c."),
         ("\\xNN", "One byte written in hex, as in `\\x7f`."),
         ("\\n \\r \\t \\0", "Newline, carriage return, tab, NUL."),
         ("\\\\ \\^", "A literal backslash, a literal caret."),
     ]
 
-    static func parse(_ text: String) -> Result<[UInt8], ParseError> {
+    static func parse(_ text: String) -> Result<Template, ParseError> {
         guard !text.isEmpty else {
             return .failure(ParseError(
                 message: "Nothing to send. Type the text this key produces, or an escape like `\\e[A`."
             ))
         }
 
+        var segments: [Segment] = []
         var out: [UInt8] = []
+        // Bytes accumulate into one run until a leader slot interrupts them, so
+        // `\Lc` is two segments and `abc` is one.
+        func flush() {
+            guard !out.isEmpty else { return }
+            segments.append(.bytes(out))
+            out = []
+        }
         let characters = Array(text)
         var index = 0
 
@@ -232,6 +315,12 @@ enum KeySequence {
                 case "0": out.append(0x00)
                 case "\\": out.append(0x5c)
                 case "^": out.append(0x5e)
+                case "L":
+                    // The one token whose byte is not known here. `\l` is not
+                    // accepted: a lowercase L beside a 1 in a mono face is the
+                    // kind of near-miss that gets a wrong prefix saved.
+                    flush()
+                    segments.append(.leader)
                 case "x", "X":
                     guard index + 1 < characters.count,
                           let high = characters[index].hexDigitValue,
@@ -244,7 +333,7 @@ enum KeySequence {
                     index += 2
                 default:
                     return .failure(ParseError(
-                        message: "`\\\(escape)` is not an escape this understands. The escapes are `\\e`, `\\n`, `\\r`, `\\t`, `\\0`, `\\\\`, `\\^`, and `\\xNN`."
+                        message: "`\\\(escape)` is not an escape this understands. The escapes are `\\e`, `\\n`, `\\r`, `\\t`, `\\0`, `\\\\`, `\\^`, `\\L`, and `\\xNN`."
                     ))
                 }
 
@@ -272,20 +361,45 @@ enum KeySequence {
             }
         }
 
-        return .success(out)
+        flush()
+        return .success(Template(segments: segments))
     }
 
-    /// The bytes, or nil. For callers that only need to know whether it works.
-    static func bytes(_ text: String) -> [UInt8]? {
+    /// The template, or nil. For callers that only need to know whether it
+    /// works, and that hold on to it until they know which host they are on.
+    static func template(_ text: String) -> Template? {
         switch parse(text) {
-        case .success(let bytes): return bytes
+        case .success(let template): return template
         case .failure: return nil
         }
+    }
+
+    /// The bytes, or nil when the text does not parse *or* needs a leader this
+    /// caller has not got. The default argument is the honest one for a caller
+    /// with no host in hand: a sequence that names a leader has no bytes there.
+    static func bytes(_ text: String, leaderByte: UInt8? = nil) -> [UInt8]? {
+        template(text)?.resolve(leaderByte: leaderByte)
     }
 
     /// `1B 5B 41`. Uppercase, space-separated, tabular by construction: this is
     /// the readout that makes a wrong sequence visible before it is saved.
     static func hex(_ bytes: [UInt8]) -> String {
         bytes.map { String(format: "%02X", $0) }.joined(separator: " ")
+    }
+
+    /// `LDR 63`. The same readout for a template, with the leader printed as the
+    /// slot it is rather than as an invented byte.
+    ///
+    /// The settings are app-wide and have no host to ask, so printing a byte
+    /// here would be printing a guess. `LDR` says what will happen instead: one
+    /// byte, filled in by whichever machine the key is pressed against.
+    static func hex(_ template: Template) -> String {
+        template.segments.flatMap { segment -> [String] in
+            switch segment {
+            case .bytes(let bytes): return bytes.map { String(format: "%02X", $0) }
+            case .leader: return [leaderSymbol]
+            }
+        }
+        .joined(separator: " ")
     }
 }

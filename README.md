@@ -115,7 +115,10 @@ one-command answer.
 - **Tailnet identity checking.** The daemon allowlists logins and answers everything else with a
   plain HTTP 403 before the upgrade completes.
 - **Face ID gate** per host on the phone, backed by the iOS Keychain for the stored unlock secret.
-- **A key bar for shells.** Esc, Tab, sticky Ctrl, arrows, and `~ | / -` above the keyboard.
+- **A key bar for shells.** A customizable row above the keyboard: Esc, Tab, sticky Ctrl and Alt,
+  arrows, punctuation, control codes, and your own key sequences. It also carries a tmux leader
+  that latches like Ctrl, and tmux keys (new window, next, zoom, select window 1 to 9) that
+  resolve against whichever leader that host uses, so one row is correct on every machine.
 - **`landline-cli`**, a raw-mode terminal test client that speaks the same protocol, for testing a
   host without a phone in your hand.
 

@@ -67,6 +67,83 @@ final class KeyBarLayoutTests: XCTestCase {
         XCTAssertEqual(entry.action, .send(bytes), file: file, line: line)
     }
 
+    // MARK: tmux
+
+    /// The section this feature exists for: one tap per tmux command, on
+    /// whichever prefix the machine is set to.
+    ///
+    /// Each entry is asserted twice, against two different prefixes, because a
+    /// key that only worked on `C-a` would be the hardcoded prefix all over
+    /// again.
+    func testTmuxSectionSendsThePrefixThenTheCommand() {
+        assertTmux("tmux.new", "c")
+        assertTmux("tmux.next", "n")
+        assertTmux("tmux.prev", "p")
+        assertTmux("tmux.last", "l")
+        assertTmux("tmux.list", "w")
+        assertTmux("tmux.split.vertical", "%")
+        assertTmux("tmux.split.horizontal", "\"")
+        assertTmux("tmux.zoom", "z")
+        assertTmux("tmux.detach", "d")
+        for number in 1...9 {
+            assertTmux("tmux.window.\(number)", Character("\(number)"))
+        }
+    }
+
+    /// The whole section has to be reachable from one place in the picker, and
+    /// nothing else may quietly acquire a leader.
+    func testTmuxSectionIsItsOwnGroup() {
+        guard let group = KeyBarCatalog.groups.first(where: { $0.id == "TMUX" }) else {
+            return XCTFail("no TMUX group in the catalog")
+        }
+        XCTAssertEqual(group.entries.count, 18, "nine commands plus windows 1 to 9")
+        for entry in group.entries {
+            guard case .send(let template) = entry.action else {
+                return XCTFail("\(entry.id) does not send")
+            }
+            XCTAssertTrue(template.needsLeader, "\(entry.id) must go through the host's leader")
+            XCTAssertNil(template.resolve(leaderByte: nil),
+                         "\(entry.id) must send nothing rather than guess a prefix")
+        }
+        for entry in KeyBarCatalog.all where !entry.id.hasPrefix("tmux.") {
+            if case .send(let template) = entry.action {
+                XCTAssertFalse(template.needsLeader, "\(entry.id) is not a leader key")
+            }
+        }
+    }
+
+    /// Labels are read on a 44pt cell in a dark room. `Lc` says leader-then-c;
+    /// a bare `c` would read as the letter.
+    func testTmuxLabelsAreShortAndSayWhichCommand() {
+        let group = KeyBarCatalog.groups.first { $0.id == "TMUX" }
+        for entry in group?.entries ?? [] {
+            XCTAssertEqual(entry.label.count, 2, "\(entry.id) label is \(entry.label)")
+            XCTAssertTrue(entry.label.hasPrefix("L"), "\(entry.id) label is \(entry.label)")
+            XCTAssertTrue(entry.name.hasPrefix("tmux "), "\(entry.id) name is \(entry.name)")
+        }
+        XCTAssertEqual(KeyBarCatalog.entry(id: "tmux.new")?.label, "Lc")
+        XCTAssertEqual(KeyBarCatalog.entry(id: "tmux.new")?.name, "tmux new window")
+        XCTAssertEqual(KeyBarCatalog.entry(id: "tmux.window.3")?.label, "L3")
+        // The readout the settings print for these, with no host to ask.
+        XCTAssertEqual(KeyBarKey(catalogID: "tmux.new").settingsDetail, "LDR 63")
+        XCTAssertEqual(KeyBarKey(catalogID: "tmux.window.3").settingsDetail, "LDR 33")
+    }
+
+    private func assertTmux(_ id: String, _ command: Character,
+                            file: StaticString = #filePath, line: UInt = #line) {
+        guard let entry = KeyBarCatalog.entry(id: id) else {
+            return XCTFail("no catalog entry \(id)", file: file, line: line)
+        }
+        guard case .send(let template) = entry.action else {
+            return XCTFail("\(id) does not send", file: file, line: line)
+        }
+        let byte = command.asciiValue ?? 0
+        XCTAssertEqual(template.resolve(leaderByte: 0x01), [0x01, byte],
+                       "set -g prefix C-a", file: file, line: line)
+        XCTAssertEqual(template.resolve(leaderByte: 0x02), [0x02, byte],
+                       "tmux's own default", file: file, line: line)
+    }
+
     // MARK: Default layout
 
     /// The default row is today's bar plus the leader, so an existing user
@@ -103,6 +180,21 @@ final class KeyBarLayoutTests: XCTestCase {
         XCTAssertEqual(KeyBarKey(label: "X", sequence: "\\q").settingsDetail, "UNRESOLVED")
     }
 
+    /// A custom key written with `\L` resolves the same way a catalog tmux key
+    /// does: kept in the bar, drawn, and turned into bytes only once the host is
+    /// known.
+    func testCustomKeyWithALeaderResolvesAgainstTheHost() {
+        let key = KeyBarKey(label: "Lc", sequence: "\\Lc")
+        guard case .send(let template) = key.resolved?.action else {
+            return XCTFail("a leader key must still resolve to a drawable key")
+        }
+        XCTAssertTrue(template.needsLeader)
+        XCTAssertEqual(template.resolve(leaderByte: 0x01), [0x01, 0x63])
+        XCTAssertEqual(template.resolve(leaderByte: 0x00), [0x00, 0x63], "C-Space")
+        XCTAssertNil(template.resolve(leaderByte: nil))
+        XCTAssertEqual(key.settingsDetail, "LDR 63")
+    }
+
     func testLatchKeysReportThemselvesAsLatches() {
         XCTAssertEqual(KeyBarKey(catalogID: "leader").settingsDetail, "LATCHES")
         XCTAssertEqual(KeyBarKey(catalogID: "esc").settingsDetail, "1B")
@@ -125,6 +217,73 @@ final class KeyBarLayoutTests: XCTestCase {
         XCTAssertEqual(decoded.keyBar[1].resolved?.action, .send([0x17]))
         XCTAssertEqual(decoded.keyBar.map(\.id), settings.keyBar.map(\.id),
                        "slot identity survives, so a reorder is not a rebuild")
+    }
+
+    /// A `settings.json` exactly as the previous build wrote it, loaded by this
+    /// one. Every stored sequence predates `\L`, so every one of them has to
+    /// produce the same bytes it always did, with no host in sight.
+    func testASettingsFileFromThePreviousBuildStillProducesIdenticalBytes() throws {
+        let document = """
+        {
+          "keyBar" : [
+            { "catalogID" : "esc", "id" : "9E1B0F3C-0000-4000-8000-000000000001",
+              "label" : "", "sequence" : "" },
+            { "catalogID" : "leader", "id" : "9E1B0F3C-0000-4000-8000-000000000002",
+              "label" : "", "sequence" : "" },
+            { "id" : "9E1B0F3C-0000-4000-8000-000000000003",
+              "label" : "NW", "sequence" : "^Ac" },
+            { "id" : "9E1B0F3C-0000-4000-8000-000000000004",
+              "label" : "C\\u2190", "sequence" : "\\\\e[1;5D" },
+            { "id" : "9E1B0F3C-0000-4000-8000-000000000005",
+              "label" : "GS", "sequence" : "git status\\\\n" },
+            { "id" : "9E1B0F3C-0000-4000-8000-000000000006",
+              "label" : "BS", "sequence" : "\\\\\\\\" }
+          ]
+        }
+        """
+        let decoded = try AppSettings.decode(from: Data(document.utf8))
+        XCTAssertEqual(decoded.keyBar.count, 6)
+        XCTAssertEqual(decoded.keyBar[0].resolved?.action, .send([0x1b]))
+        XCTAssertEqual(decoded.keyBar[1].resolved?.action, .latchLeader)
+        XCTAssertEqual(decoded.keyBar[2].resolved?.action, .send([0x01, 0x63]),
+                       "a hardcoded prefix keeps sending exactly what it did")
+        XCTAssertEqual(decoded.keyBar[3].resolved?.action,
+                       .send([0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x44]))
+        XCTAssertEqual(decoded.keyBar[4].resolved?.action,
+                       .send(Array("git status".utf8) + [0x0a]))
+        XCTAssertEqual(decoded.keyBar[5].resolved?.action, .send([0x5c]),
+                       "an escaped backslash is still one backslash, not a leader")
+
+        // And none of them needs a host to say what it sends.
+        for key in decoded.keyBar {
+            guard case .send(let template) = key.resolved?.action else { continue }
+            XCTAssertFalse(template.needsLeader, "\(key.label) must not have grown a leader")
+            XCTAssertNotNil(template.resolve(leaderByte: nil))
+        }
+
+        // Ids survive, so the row is the row it was rather than a rebuilt one.
+        XCTAssertEqual(decoded.keyBar[2].id,
+                       UUID(uuidString: "9E1B0F3C-0000-4000-8000-000000000003"))
+        // And re-encoding keeps the source text rather than baking bytes in.
+        let round = try AppSettings.decode(from: AppSettings.encode(decoded))
+        XCTAssertEqual(round, decoded)
+        XCTAssertEqual(round.keyBar[2].sequence, "^Ac")
+    }
+
+    /// A key written with `\L` survives the file the same way, as its source
+    /// text, and comes back still needing a host.
+    func testALeaderKeyRoundTripsAsItsSourceText() throws {
+        var settings = AppSettings()
+        settings.keyBar = [KeyBarKey(label: "Lc", sequence: "\\Lc")]
+        let data = try AppSettings.encode(settings)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\\\\Lc"),
+                      "the file holds what was typed, not the bytes")
+        let decoded = try AppSettings.decode(from: data)
+        XCTAssertEqual(decoded, settings)
+        guard case .send(let template) = decoded.keyBar[0].resolved?.action else {
+            return XCTFail("the stored leader key must still resolve")
+        }
+        XCTAssertEqual(template.resolve(leaderByte: 0x02), [0x02, 0x63])
     }
 
     /// A settings file written before the setting existed is the default row.

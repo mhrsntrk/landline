@@ -11,14 +11,25 @@ import Foundation
 
 /// What pressing one key in the bar does.
 enum KeyBarAction: Hashable {
-    /// Sends these bytes immediately, through the same input path as the
-    /// software keyboard, so a latched modifier still folds them.
-    case send([UInt8])
+    /// Sends this sequence immediately, through the same input path as the
+    /// software keyboard, so a latched modifier still folds it.
+    ///
+    /// A template rather than bytes, because a key written with `\L` cannot know
+    /// its own bytes: the leader is a per-host fact and this layout is app-wide.
+    /// The bar resolves it against the host it is drawn on, at the moment the
+    /// key is pressed.
+    case send(KeySequence.Template)
     /// Latches instead of sending. The next key is folded, prefixed, or
     /// preceded by the host's leader byte, then the latch clears.
     case latchCtrl
     case latchAlt
     case latchLeader
+
+    /// A key whose bytes are fixed. Most of the catalog is this, and writing it
+    /// out is what keeps those entries readable as the byte strings they are.
+    static func send(_ bytes: [UInt8]) -> KeyBarAction {
+        .send(KeySequence.Template(bytes))
+    }
 
     var isLatch: Bool {
         if case .send = self { return false }
@@ -60,6 +71,11 @@ enum KeyBarCatalog {
             .init(id: "pageup", label: "PGUP", name: "page up", action: .send([0x1b, 0x5b, 0x35, 0x7e])),
             .init(id: "pagedown", label: "PGDN", name: "page down", action: .send([0x1b, 0x5b, 0x36, 0x7e])),
         ]),
+        // Second, ahead of everything except the plain keys, because this is
+        // what the row is actually used for: a tmux session with a status bar,
+        // and windows being switched all day. Buried at the bottom of the
+        // catalog these would not be found.
+        Group(id: "TMUX", entries: tmuxEntries),
         Group(id: "MODIFIERS", entries: [
             .init(id: "ctrl", label: "CTRL", name: "control", action: .latchCtrl),
             .init(id: "alt", label: "ALT", name: "alt", action: .latchAlt),
@@ -88,6 +104,48 @@ enum KeyBarCatalog {
                   action: .send(Array(String(symbol.character).utf8)))
         }),
     ]
+
+    /// One tap for what is otherwise a latch plus a keystroke.
+    ///
+    /// Every one of these is written in `KeySequence` syntax with `\L` standing
+    /// in for the prefix, so the same bar is correct on a machine running
+    /// `set -g prefix C-a` and on one left at tmux's `C-b`. Nothing here
+    /// hardcodes a prefix byte, which is the whole point: the layout is
+    /// app-wide, the leader is per host.
+    ///
+    /// Labels carry the `L` because the cell is 44pt and a bare `c` beside the
+    /// punctuation keys reads as the letter c. `Lc` reads as leader-then-c, and
+    /// wears the same three letters as the `LDR` latch it stands for. The name a
+    /// person would say stays in the catalog list and in VoiceOver, where there
+    /// is room for it.
+    private static let tmuxEntries: [KeyBarCatalogEntry] = ([
+        ("new", "c", "new window", "\\Lc"),
+        ("next", "n", "next window", "\\Ln"),
+        ("prev", "p", "previous window", "\\Lp"),
+        ("last", "l", "last window", "\\Ll"),
+        ("list", "w", "list windows", "\\Lw"),
+        ("split.vertical", "%", "split vertical", "\\L%"),
+        ("split.horizontal", "\"", "split horizontal", "\\L\""),
+        ("zoom", "z", "zoom pane", "\\Lz"),
+        ("detach", "d", "detach", "\\Ld"),
+    ] + (1...9).map { number in
+        // The direct answer to "switch to that window", which is the thing the
+        // status bar is being read for in the first place.
+        ("window.\(number)", "\(number)", "window \(number)", "\\L\(number)")
+    }).map { entry in
+        KeyBarCatalogEntry(id: "tmux.\(entry.0)",
+                           label: "L\(entry.1)",
+                           name: "tmux \(entry.2)",
+                           action: .send(sequence(entry.3)))
+    }
+
+    /// A catalog entry written in the user's own syntax. An empty template is
+    /// unreachable — every string above is asserted in `KeyBarLayoutTests` — and
+    /// an empty one would draw a key that sends nothing rather than crash a
+    /// running app.
+    private static func sequence(_ text: String) -> KeySequence.Template {
+        KeySequence.template(text) ?? KeySequence.Template([])
+    }
 
     /// The punctuation a shell needs and a phone keyboard buries a layer deep.
     private static let symbols: [(id: String, character: Character, name: String)] = [
@@ -194,9 +252,14 @@ extension KeyBarKey {
                                accessibility: entry.name, action: entry.action)
         }
         let trimmedLabel = label.trimmingCharacters(in: .whitespaces)
-        guard !trimmedLabel.isEmpty, let bytes = KeySequence.bytes(sequence) else { return nil }
+        // The template, not the bytes: a sequence written with `\L` only becomes
+        // bytes once the bar knows which host it is drawn on. Failing to parse
+        // still drops the key, exactly as before.
+        guard !trimmedLabel.isEmpty,
+              let template = KeySequence.template(sequence),
+              !template.isEmpty else { return nil }
         return ResolvedKey(id: id, label: trimmedLabel,
-                           accessibility: "\(trimmedLabel), custom key", action: .send(bytes))
+                           accessibility: "\(trimmedLabel), custom key", action: .send(template))
     }
 
     /// The name the settings list prints for this key.
@@ -209,9 +272,11 @@ extension KeyBarKey {
     }
 
     /// The measured fact under the name: what the key actually puts on the wire.
+    /// A leader slot prints as `LDR` rather than as a byte, because these
+    /// settings are app-wide and have no host to ask.
     var settingsDetail: String {
         switch resolved?.action {
-        case .send(let bytes): return KeySequence.hex(bytes)
+        case .send(let template): return KeySequence.hex(template)
         case .latchCtrl, .latchAlt, .latchLeader: return "LATCHES"
         case .none: return "UNRESOLVED"
         }

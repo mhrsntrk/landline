@@ -236,9 +236,11 @@ final class ControlFoldTests: XCTestCase {
 /// bytes, and that malformed input is refused rather than partially accepted.
 final class KeySequenceParsingTests: XCTestCase {
 
+    /// Resolved against no host at all, which is what every sequence written
+    /// before `\L` existed needs and gets.
     private func bytes(_ text: String, file: StaticString = #filePath, line: UInt = #line) -> [UInt8]? {
         switch KeySequence.parse(text) {
-        case .success(let bytes): return bytes
+        case .success(let template): return template.resolve(leaderByte: nil)
         case .failure(let error):
             XCTFail("\(text) should parse, got: \(error.message)", file: file, line: line)
             return nil
@@ -246,8 +248,8 @@ final class KeySequenceParsingTests: XCTestCase {
     }
 
     private func failure(_ text: String, file: StaticString = #filePath, line: UInt = #line) {
-        if case .success(let bytes) = KeySequence.parse(text) {
-            XCTFail("\(text) should not parse, got \(KeySequence.hex(bytes))", file: file, line: line)
+        if case .success(let template) = KeySequence.parse(text) {
+            XCTFail("\(text) should not parse, got \(KeySequence.hex(template))", file: file, line: line)
         }
         XCTAssertNil(KeySequence.bytes(text), file: file, line: line)
     }
@@ -346,6 +348,160 @@ final class KeySequenceParsingTests: XCTestCase {
         for sample in ["abc", "^X", "\\e", "\\x1b", "\\n", "\\r", "\\t", "\\0", "\\\\", "\\^"] {
             XCTAssertNotNil(KeySequence.bytes(sample), "the syntax table documents \(sample)")
         }
-        XCTAssertEqual(KeySequence.syntaxRows.count, 6)
+        // `\L` parses but has no bytes without a host, so it is asserted against
+        // a leader rather than against nil.
+        XCTAssertNotNil(KeySequence.bytes("\\L", leaderByte: 0x01))
+        XCTAssertEqual(KeySequence.syntaxRows.count, 7)
+        XCTAssertTrue(KeySequence.syntaxRows.contains { $0.token == "\\L" },
+                      "the leader token has to be documented where the escapes are")
+    }
+}
+
+// MARK: - The leader token
+
+/// `\L`, the one token whose byte is not known when the sequence is written.
+///
+/// The layout is app-wide and the tmux prefix is per host, so a key that
+/// hardcoded `^A` would send the wrong prefix the moment the same bar was used
+/// against a machine set to `C-b`. These assert the two halves of the fix: that
+/// the token resolves to whatever the host is set to, and that it resolves to
+/// nothing at all rather than to a guess when the host has no usable prefix.
+final class KeySequenceLeaderTests: XCTestCase {
+
+    private func template(_ text: String,
+                          file: StaticString = #filePath, line: UInt = #line) -> KeySequence.Template? {
+        switch KeySequence.parse(text) {
+        case .success(let template): return template
+        case .failure(let error):
+            XCTFail("\(text) should parse, got: \(error.message)", file: file, line: line)
+            return nil
+        }
+    }
+
+    func testLeaderAloneIsOneByteFromTheHost() {
+        guard let template = template("\\L") else { return }
+        XCTAssertTrue(template.needsLeader)
+        XCTAssertFalse(template.isEmpty, "a bare leader still sends something")
+        XCTAssertEqual(template.byteCount, 1)
+        XCTAssertEqual(template.resolve(leaderByte: 0x01), [0x01])
+        XCTAssertEqual(template.resolve(leaderByte: 0x02), [0x02])
+    }
+
+    /// The exercise itself: tmux's new window, on whichever prefix the machine
+    /// is set to.
+    func testLeaderThenAKey() {
+        guard let template = template("\\Lc") else { return }
+        XCTAssertEqual(template.byteCount, 2)
+        XCTAssertEqual(template.resolve(leaderByte: 0x01), [0x01, 0x63], "set -g prefix C-a")
+        XCTAssertEqual(template.resolve(leaderByte: 0x02), [0x02, 0x63], "tmux's own default")
+        XCTAssertEqual(template.resolve(leaderByte: 0x00), [0x00, 0x63], "C-Space")
+    }
+
+    /// Window switching, the thing the tmux section exists for.
+    func testLeaderThenADigit() {
+        XCTAssertEqual(template("\\L1")?.resolve(leaderByte: 0x01), [0x01, 0x31])
+        XCTAssertEqual(template("\\L9")?.resolve(leaderByte: 0x02), [0x02, 0x39])
+    }
+
+    func testLeaderComposesWithTheOtherEscapes() {
+        XCTAssertEqual(template("\\L\\e[A")?.resolve(leaderByte: 0x01),
+                       [0x01, 0x1b, 0x5b, 0x41])
+        XCTAssertEqual(template("\\L\\x25")?.resolve(leaderByte: 0x01), [0x01, 0x25], "split")
+        XCTAssertEqual(template("\\L^c")?.resolve(leaderByte: 0x02), [0x02, 0x03])
+        XCTAssertEqual(template("\\L\"")?.resolve(leaderByte: 0x01), [0x01, 0x22])
+        // More than one leader in one sequence is legal, if unusual: tmux's own
+        // "send the prefix through to the inner session" is exactly this.
+        XCTAssertEqual(template("\\L\\L")?.resolve(leaderByte: 0x01), [0x01, 0x01])
+    }
+
+    /// The escape that has always meant a literal backslash still does. `\\L` is
+    /// a backslash followed by the letter L, not a leader, or every sequence
+    /// that ever printed a Windows path would change meaning.
+    func testAnEscapedBackslashIsNotALeader() {
+        guard let template = template("\\\\L") else { return }
+        XCTAssertFalse(template.needsLeader)
+        XCTAssertEqual(template.resolve(leaderByte: nil), [0x5c, 0x4c])
+        XCTAssertEqual(template.resolve(leaderByte: 0x01), [0x5c, 0x4c],
+                       "a host's prefix cannot change what this sends")
+    }
+
+    /// Lowercase is not the token. A `\l` beside a `\1` in a mono face is
+    /// exactly the near-miss that would get a wrong sequence saved, so it is
+    /// refused with the sentence that names the escapes.
+    func testLowercaseIsNotTheToken() {
+        guard case .failure(let error) = KeySequence.parse("\\lc") else {
+            return XCTFail("`\\l` must not be the leader token")
+        }
+        XCTAssertTrue(error.message.contains("`\\l`"), "the refusal names the token that was wrong")
+        XCTAssertTrue(error.message.contains("`\\L`"), "and lists the one that exists")
+    }
+
+    /// The rule the LDR key already follows: no prefix byte means no bytes, not
+    /// tmux's default guessed at.
+    func testAHostWithNoLeaderResolvesToNothing() {
+        XCTAssertNil(template("\\Lc")?.resolve(leaderByte: nil))
+        XCTAssertNil(KeySequence.bytes("\\Lc"))
+        XCTAssertNil(KeySequence.bytes("\\Lc", leaderByte: LeaderKey.byte(for: "M-x")))
+        XCTAssertEqual(KeySequence.bytes("\\Lc", leaderByte: LeaderKey.byte(for: "C-a")), [0x01, 0x63])
+    }
+
+    /// A sequence with no leader in it must be resolvable with no host context
+    /// at all, which is what every stored key from the previous build is.
+    func testSequencesWithoutALeaderNeedNoHost() {
+        for text in ["^Ac", "\\e[1;5D", "git status\\n", "~", "\\x7f", "\\\\", "\\^"] {
+            guard let template = template(text) else { continue }
+            XCTAssertFalse(template.needsLeader, text)
+            XCTAssertEqual(template.resolve(leaderByte: nil), template.resolve(leaderByte: 0x01),
+                           "\(text) cannot depend on the host")
+            XCTAssertNotNil(KeySequence.bytes(text), text)
+        }
+    }
+
+    /// Every sequence this app could already send, still byte for byte what it
+    /// was. This is the list that must not move.
+    func testPreExistingSequencesProduceIdenticalBytes() {
+        let unchanged: [(String, [UInt8])] = [
+            ("^A", [0x01]),
+            ("^Ac", [0x01, 0x63]),
+            ("^?", [0x7f]),
+            ("^[", [0x1b]),
+            ("\\e", [0x1b]),
+            ("\\e[A", [0x1b, 0x5b, 0x41]),
+            ("\\e[1;5D", [0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x44]),
+            ("\\x1b", [0x1b]),
+            ("\\x7f", [0x7f]),
+            ("\\xff", [0xff]),
+            ("\\n", [0x0a]),
+            ("\\r", [0x0d]),
+            ("\\t", [0x09]),
+            ("\\0", [0x00]),
+            ("\\\\", [0x5c]),
+            ("\\^", [0x5e]),
+            ("clear\\n", Array("clear".utf8) + [0x0a]),
+            ("git status", Array("git status".utf8)),
+            ("é", Array("é".utf8)),
+        ]
+        for (text, expected) in unchanged {
+            XCTAssertEqual(KeySequence.bytes(text), expected, text)
+        }
+    }
+
+    /// The readout the settings print. `LDR` rather than an invented byte,
+    /// because those screens are app-wide and have no host to ask.
+    func testHexPrintsTheLeaderSlotSymbolically() {
+        XCTAssertEqual(KeySequence.leaderSymbol, "LDR")
+        XCTAssertEqual(template("\\Lc").map(KeySequence.hex), "LDR 63")
+        XCTAssertEqual(template("\\L1").map(KeySequence.hex), "LDR 31")
+        XCTAssertEqual(template("\\L").map(KeySequence.hex), "LDR")
+        XCTAssertEqual(template("\\L\\e[A").map(KeySequence.hex), "LDR 1B 5B 41")
+        XCTAssertEqual(template("\\e[A").map(KeySequence.hex), "1B 5B 41",
+                       "a fixed sequence reads exactly as it always did")
+    }
+
+    /// Nothing is emitted for a sequence that fails after a leader, for the same
+    /// reason nothing was emitted for one that failed after a control byte.
+    func testAPartialParseAfterALeaderEmitsNothing() {
+        XCTAssertNil(KeySequence.template("\\Lc\\q"))
+        XCTAssertNil(KeySequence.bytes("\\Lc\\q", leaderByte: 0x01))
     }
 }

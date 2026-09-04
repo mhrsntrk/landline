@@ -21,8 +21,9 @@ struct KeyBar: View {
     @Binding var leaderLatched: Bool
 
     /// The byte this host's tmux prefix resolves to, or nil when the stored
-    /// notation does not parse. Nil disables the LDR key: a leader that sends
-    /// nothing has to look switched off rather than armed.
+    /// notation does not parse. Nil disables the LDR key and every key whose
+    /// sequence names the leader with `\L`: a key that sends nothing has to look
+    /// switched off rather than armed.
     var leaderByte: UInt8?
 
     /// Bytes for a key that sends immediately. Routed through the same input
@@ -91,8 +92,8 @@ struct KeyBar: View {
     @ViewBuilder
     private func cell(_ key: ResolvedKey) -> some View {
         switch key.action {
-        case .send(let bytes):
-            sendKey(key, bytes: bytes)
+        case .send(let template):
+            sendKey(key, template: template)
         case .latchCtrl:
             latch(key, isOn: $ctrlLatched)
         case .latchAlt:
@@ -102,14 +103,23 @@ struct KeyBar: View {
         }
     }
 
-    private func sendKey(_ key: ResolvedKey, bytes: [UInt8]) -> some View {
-        Button {
-            send?(bytes)
+    /// The bytes are worked out here rather than when the layout was read,
+    /// because a sequence written with `\L` only means something once the host
+    /// is known. A key that needs this host's leader and cannot get one is
+    /// disabled and sends nothing, the same treatment `LDR` gets, rather than
+    /// falling back to tmux's default prefix and typing into a live shell.
+    private func sendKey(_ key: ResolvedKey, template: KeySequence.Template) -> some View {
+        let bytes = template.resolve(leaderByte: leaderByte)
+        return Button {
+            if let bytes, !bytes.isEmpty { send?(bytes) }
         } label: {
             Text(key.label)
         }
         .buttonStyle(KeyCellStyle(latched: false))
-        .accessibilityLabel(Text(key.accessibility))
+        .disabled(bytes == nil)
+        .accessibilityLabel(Text(bytes == nil
+                                 ? "\(key.accessibility), unavailable, this host has no leader"
+                                 : key.accessibility))
     }
 
     /// Ctrl, Alt and Leader latch independently, because `C-a C-o` is a real

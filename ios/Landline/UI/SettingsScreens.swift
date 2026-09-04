@@ -338,10 +338,12 @@ struct KeyBarCatalogView: View {
     }
 
     /// What the key puts on the wire, in hex — the same readout the custom
-    /// editor shows, so the two are read the same way.
+    /// editor shows, so the two are read the same way. A tmux key prints its
+    /// leader slot as `LDR`, because this screen is app-wide and the byte is
+    /// per host.
     private func detail(_ entry: KeyBarCatalogEntry) -> String {
         switch entry.action {
-        case .send(let bytes): return KeySequence.hex(bytes)
+        case .send(let template): return KeySequence.hex(template)
         case .latchCtrl, .latchAlt, .latchLeader: return "LATCHES"
         }
     }
@@ -408,7 +410,7 @@ struct KeyBarCustomKeyView: View {
             if let editing, let key = settings.key(id: editing) {
                 label = key.label
                 sequence = key.sequence
-            } else if let seed = DemoSeed.customKeySeed {
+            } else if let seed = Self.demoSequenceSeed ?? DemoSeed.customKeySeed {
                 // Debug screenshot hook: a sequence in the field, so the hex
                 // readout, the syntax table and the refusal can be looked at.
                 label = seed.label
@@ -421,12 +423,29 @@ struct KeyBarCustomKeyView: View {
         Text(text).foregroundColor(Theme.inkMuted)
     }
 
-    private var parsed: Result<[UInt8], KeySequence.ParseError> {
+    /// Debug screenshot hook, the same idiom as `DemoSeed`: put any sequence in
+    /// the field from the environment, so a readout like `LDR 63` can be looked
+    /// at rather than reasoned about. Off unless the variable is set, and
+    /// compiled out of release.
+    private static var demoSequenceSeed: (label: String, sequence: String)? {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        guard let sequence = environment["LANDLINE_DEMO_SEQ"] else { return nil }
+        return (environment["LANDLINE_DEMO_LABEL"] ?? "Lc", sequence)
+        #else
+        return nil
+        #endif
+    }
+
+    private var parsed: Result<KeySequence.Template, KeySequence.ParseError> {
         KeySequence.parse(sequence)
     }
 
-    private var bytes: [UInt8]? {
-        if case .success(let bytes) = parsed { return bytes }
+    /// The parsed sequence, still holding its leader slot. These settings are
+    /// app-wide, so there is no host here to fill it in and the readout says so
+    /// rather than printing a byte nobody chose.
+    private var template: KeySequence.Template? {
+        if case .success(let template) = parsed { return template }
         return nil
     }
 
@@ -438,23 +457,28 @@ struct KeyBarCustomKeyView: View {
     }
 
     private var annotation: String {
-        guard let bytes else { return "UNRESOLVED" }
-        return "\(bytes.count) \(bytes.count == 1 ? "BYTE" : "BYTES") / \(KeySequence.hex(bytes))"
+        guard let template, !template.isEmpty else { return "UNRESOLVED" }
+        let count = template.byteCount
+        return "\(count) \(count == 1 ? "BYTE" : "BYTES") / \(KeySequence.hex(template))"
     }
 
     /// The readout that makes a wrong sequence visible before it is saved.
     /// Drawn as a plate, the way the font screen draws its specimen: two
     /// registration marks, `ground`, and the value set large enough to read at
     /// arm's length.
+    ///
+    /// A `\L` prints as `LDR`, not as a byte. This screen has no host, so the
+    /// only honest thing it can show for the leader is the slot itself, with one
+    /// line under the plate saying who fills it in.
     private var bytesPlate: some View {
         VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
             HStack(spacing: Theme.Metric.grid * 2) {
                 MicroLabel("RESOLVED BYTES")
                 Spacer(minLength: 0)
-                MicroLabel(bytes == nil ? "—" : "\(bytes!.count)").llMeasuredColumn()
+                MicroLabel(template.map { "\($0.byteCount)" } ?? "—").llMeasuredColumn()
             }
-            Text(bytes.map { $0.isEmpty ? "—" : KeySequence.hex($0) } ?? "—")
-                .llValueStrong(bytes == nil ? Theme.inkMuted : Theme.inkBright)
+            Text(template.map { $0.isEmpty ? "—" : KeySequence.hex($0) } ?? "—")
+                .llValueStrong(template == nil ? Theme.inkMuted : Theme.inkBright)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, Theme.Metric.grid * 3)
@@ -462,7 +486,12 @@ struct KeyBarCustomKeyView: View {
                 .background(Theme.ground)
                 .overlay { RegistrationMarks(diagonal: .topLeadingBottomTrailing) }
                 .accessibilityLabel(Text("resolved bytes"))
-                .accessibilityValue(Text(bytes.map { KeySequence.hex($0) } ?? "does not parse"))
+                .accessibilityValue(Text(template.map { KeySequence.hex($0) } ?? "does not parse"))
+            if template?.needsLeader == true {
+                proseText("LDR is filled in per host, from that host's tmux leader.")
+                    .llProse()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.vertical, Theme.Metric.grid * 3)
     }
@@ -490,8 +519,11 @@ struct KeyBarCustomKeyView: View {
         }
     }
 
+    /// A sequence that needs a leader is saveable here even though this screen
+    /// cannot resolve it: the byte arrives with the host. What is refused is the
+    /// same as before, a sequence that does not parse or produces nothing.
     private var isSaveable: Bool {
-        guard let bytes, !bytes.isEmpty else { return false }
+        guard let template, !template.isEmpty else { return false }
         return !label.trimmingCharacters(in: .whitespaces).isEmpty
     }
 

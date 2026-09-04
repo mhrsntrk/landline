@@ -20,6 +20,24 @@ final class SettingsStore {
         } else {
             settings = AppSettings()
         }
+        settings.keyBar = Self.demoKeyBar ?? settings.keyBar
+    }
+
+    /// Debug screenshot hook, the same idiom as `DemoSeed`: a row carrying a
+    /// couple of tmux keys, so the bar can be photographed as it is used rather
+    /// than as it ships. In memory only, never written back, and compiled out of
+    /// release.
+    private static var demoKeyBar: [KeyBarKey]? {
+        #if DEBUG
+        guard ProcessInfo.processInfo.environment["LANDLINE_DEMO_KEYBAR"] == "tmux" else {
+            return nil
+        }
+        return ["esc", "ctrl", "leader",
+                "tmux.new", "tmux.window.1", "tmux.window.2", "tmux.next", "tmux.zoom",
+                "arrow.up", "arrow.down", "sym.pipe"].map { KeyBarKey(catalogID: $0) }
+        #else
+        return nil
+        #endif
     }
 
     // MARK: - Key bar
