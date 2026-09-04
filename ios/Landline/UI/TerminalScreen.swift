@@ -224,6 +224,11 @@ struct TerminalScreen: View {
             // has no glyphs.
             parts.append("REQ " + controller.requestedFontFamily.uppercased())
             parts.append("GOT " + controller.resolvedFontFamily.uppercased())
+            // What is drawing the glyphs, which is the only claim that matters.
+            if !controller.drawingFontFamily.isEmpty,
+                controller.drawingFontFamily != controller.resolvedFontFamily {
+                parts.append("DRAWN BY " + controller.drawingFontFamily.uppercased())
+            }
             if !controller.primaryHasGlyphs { parts.append("NO GLYPHS") }
         }
         return parts.joined(separator: " / ")

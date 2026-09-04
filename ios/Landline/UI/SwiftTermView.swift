@@ -422,6 +422,10 @@ final class TerminalController {
     /// being applied.
     private(set) var primaryHasGlyphs = true
 
+    /// The face CoreText picks to draw a digit. Differs from
+    /// `resolvedFontFamily` exactly when the cascade is doing the drawing.
+    private(set) var drawingFontFamily = ""
+
     func apply(fontFamily: String, size: CGFloat) {
         // Recorded even with no view attached, so the family survives the gap
         // between a SwiftUI update and `makeUIView`.
@@ -441,6 +445,9 @@ final class TerminalController {
         resolvedFontFamily = normal.familyName
         requestedFontFamily = fontFamily.isEmpty ? "BUNDLED" : fontFamily
         primaryHasGlyphs = TerminalFont.canDrawASCII(normal)
+        // Which face actually draws a digit, asked of CoreText rather than
+        // inferred from the composed font's name.
+        drawingFontFamily = TerminalFont.drawingFamily(for: "0", in: normal)
         view.setFonts(
             normal: normal,
             bold: bold,
@@ -965,6 +972,23 @@ enum TerminalFont {
     /// perfectly good family name while every character it is asked for falls
     /// through the cascade to the fallback face. On screen that is
     /// indistinguishable from the wrong font being selected.
+    /// The font CoreText actually selects to draw `sample` with `font`.
+    ///
+    /// This is the only honest answer to "which face is on screen". A font
+    /// composed with a cascade list reports its own family name even when the
+    /// primary carries no glyphs and every character is being drawn by the
+    /// fallback, which is indistinguishable from the wrong font being applied.
+    static func drawingFamily(for sample: String, in font: UIFont) -> String {
+        let attributed = NSAttributedString(string: sample, attributes: [.font: font])
+        let line = CTLineCreateWithAttributedString(attributed)
+        guard let runs = CTLineGetGlyphRuns(line) as? [CTRun], let first = runs.first else {
+            return font.familyName
+        }
+        let attrs = CTRunGetAttributes(first) as NSDictionary
+        guard let runFont = attrs[kCTFontAttributeName as String] else { return font.familyName }
+        return CTFontCopyFamilyName(runFont as! CTFont) as String
+    }
+
     static func canDrawASCII(_ font: UIFont) -> Bool {
         let ctFont = font as CTFont
         for scalar in ["0", "A", "m"].compactMap({ $0.unicodeScalars.first }) {
