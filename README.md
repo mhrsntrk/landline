@@ -55,11 +55,14 @@ no certificate pinning code anywhere in the client.
 ### On each machine
 
 ```sh
-brew install mhrsntrk/tap/landline    # macOS
+brew install mhrsntrk/tap/landline    # macOS and Linux
 
 # macOS or Linux, without Homebrew (Windows: grab landlined.exe from the releases page)
 curl -fsSL https://raw.githubusercontent.com/mhrsntrk/landline/main/packaging/install.sh | sh
 ```
+
+Linux binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer. Anything older builds
+from source with `cargo build --release -p landlined`.
 
 Then, on every host:
 

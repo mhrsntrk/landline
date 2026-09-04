@@ -45,16 +45,21 @@ class Landline < Formula
     bin.install Dir["landlined-*"].first => "landlined"
   end
 
-  caveats <<~EOS
-    Start the daemon and expose it on your tailnet:
+  # `caveats` is a method, not a DSL call. Written as `caveats <<~EOS`
+  # Homebrew raises "undefined method 'caveats'" at install time, which
+  # only shows up when someone actually installs the formula.
+  def caveats
+    <<~EOS
+      Start the daemon and expose it on your tailnet:
 
-      landlined install
-      tailscale serve --bg --https=443 http://127.0.0.1:7777
+        landlined install
+        tailscale serve --bg --https=443 http://127.0.0.1:7777
 
-    Then add this machine's ts.net hostname in the iOS app.
+      Then add this machine's ts.net hostname in the iOS app.
 
-    Check it with `landlined doctor`, which reports the URL to enter.
-  EOS
+      Check it with `landlined doctor`, which reports the URL to enter.
+    EOS
+  end
 
   test do
     system "#{bin}/landlined", "--help"

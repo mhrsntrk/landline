@@ -18,6 +18,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "landlined",
+    version,
     about = "Landline host daemon: your terminal, on your tailnet"
 )]
 struct Cli {

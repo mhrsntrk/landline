@@ -149,3 +149,56 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  # Renders packaging/homebrew/landline.rb from the checksums this release
+  # actually published and pushes it to mhrsntrk/homebrew-tap. Hand-editing a
+  # formula is the step that silently rots: the SHAs stop matching the binaries
+  # and nobody notices until an install fails.
+  #
+  # Needs a TAP_TOKEN secret (a PAT with contents:write on homebrew-tap).
+  # GITHUB_TOKEN cannot reach another repository. Without the secret this job
+  # fails and the release itself still stands, so the formula can be updated by
+  # hand as a fallback.
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render the formula from the published checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          for t in aarch64-apple-darwin x86_64-apple-darwin \
+                   aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
+            gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --pattern "landlined-$t.sha256" --dir sums
+          done
+          sha() { awk '{print $1}' "sums/landlined-$1.sha256"; }
+          sed -e "s/__VERSION__/$version/g" \
+              -e "s/__SHA_ARM__/$(sha aarch64-apple-darwin)/" \
+              -e "s/__SHA_X86__/$(sha x86_64-apple-darwin)/" \
+              -e "s/__SHA_LINUX_ARM__/$(sha aarch64-unknown-linux-gnu)/" \
+              -e "s/__SHA_LINUX_X86__/$(sha x86_64-unknown-linux-gnu)/" \
+              packaging/homebrew/landline.rb > landline.rb
+          # A leftover placeholder means a rename went unnoticed upstream.
+          ! grep -q "__" landline.rb
+
+      - name: Push it to the tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/mhrsntrk/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp landline.rb tap/Formula/landline.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/landline.rb
+          git diff --quiet --cached || git commit -m "landline $version"
+          git push
