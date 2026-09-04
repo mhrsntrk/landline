@@ -1,3 +1,5 @@
+<img src="docs/media/icon.png" alt="" width="120" align="right">
+
 # Landline
 
 A fixed, private, direct line to every machine you own. Terminal on your iPhone, over your own tailnet.
