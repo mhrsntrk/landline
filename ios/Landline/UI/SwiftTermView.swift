@@ -494,6 +494,11 @@ enum TerminalFont {
         }
 
         guard let face = faceName(in: trimmed, bold: bold) else {
+            // isInstalled just said yes, so a nil face here is the two-notions
+            // -of-installed bug returning in a new place. It has already shipped
+            // twice as a silent fallback that looked like the user's font simply
+            // not applying, so make it loud in debug rather than quiet forever.
+            assertionFailure("'\(trimmed)' reports installed but yields no usable face")
             return nerd(size: size, bold: bold)
         }
         let descriptor = UIFontDescriptor(fontAttributes: [.name: face])
@@ -515,6 +520,28 @@ enum TerminalFont {
     /// synthesised smear, which is what a terminal wants.
     private static func faceName(in family: String, bold: Bool) -> String? {
         let names = UIFont.fontNames(forFamilyName: family)
+        // A provider-installed family enumerates NO faces, exactly as it
+        // appears in no family list. Returning nil here sent the terminal to
+        // the bundled font while the picker cheerfully showed the user's font
+        // as selected: the same blindness as isInstalled, one layer down.
+        // The family name itself resolves, so ask for that.
+        if names.isEmpty {
+            guard let base = UIFont(name: family, size: probeSize),
+                base.familyName.caseInsensitiveCompare(family) == .orderedSame
+            else { return nil }
+            guard bold else { return base.fontName }
+            // Derive bold from the descriptor. UIFont(descriptor:) never
+            // returns nil and will happily hand back Helvetica, so the family
+            // is re-checked before the bold face is trusted.
+            if let boldDescriptor = base.fontDescriptor.withSymbolicTraits(.traitBold) {
+                let boldFont = UIFont(descriptor: boldDescriptor, size: probeSize)
+                if boldFont.familyName.caseInsensitiveCompare(family) == .orderedSame {
+                    return boldFont.fontName
+                }
+            }
+            // No bold face: the regular one beats swapping fonts mid-line.
+            return base.fontName
+        }
         let target: CGFloat = bold ? UIFont.Weight.bold.rawValue : UIFont.Weight.regular.rawValue
         var best: (name: String, distance: CGFloat)?
         for name in names {

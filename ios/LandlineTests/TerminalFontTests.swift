@@ -575,3 +575,35 @@ final class FontInstalledConsistencyTests: XCTestCase {
         XCTAssertNil(TerminalFont.resolvedFamily(for: "Definitely Not A Font 8817"))
     }
 }
+
+
+/// `faceName` used to start from `UIFont.fontNames(forFamilyName:)`, which
+/// returns an empty array for a font a provider app installed. The terminal
+/// then rendered in the bundled face while the picker showed the user's font
+/// as selected: the same blindness as `isInstalled`, one layer down, and
+/// invisible without looking at real output on a real device.
+final class FaceResolutionTests: XCTestCase {
+    /// Every installed family must yield a usable face in both weights.
+    /// A nil face is what silently swapped the font.
+    func testInstalledFamiliesAlwaysYieldAFace() {
+        let families = ["Menlo", "Courier New", TerminalFont.bundledFamilyName]
+        for family in families where TerminalFont.isInstalled(family: family) {
+            for bold in [false, true] {
+                let font = TerminalFont.font(family: family, size: 14, bold: bold)
+                XCTAssertEqual(
+                    font.familyName, family,
+                    "\(family) bold=\(bold) fell back to \(font.familyName)"
+                )
+            }
+        }
+    }
+
+    /// Bold must not silently become a different family.
+    func testBoldStaysInFamily() {
+        for family in ["Menlo", "Courier New"] where TerminalFont.isInstalled(family: family) {
+            let regular = TerminalFont.font(family: family, size: 14, bold: false)
+            let bold = TerminalFont.font(family: family, size: 14, bold: true)
+            XCTAssertEqual(regular.familyName, bold.familyName)
+        }
+    }
+}
