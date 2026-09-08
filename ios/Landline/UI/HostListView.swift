@@ -718,7 +718,18 @@ enum DemoSeed {
     /// screenshot run has no business connecting to it.
     static var seedsLiveHost: Bool {
         mode == "live" || mode == "liveresize" || mode == "liveleader" || switchesHosts
+            || attachesAFile
     }
+
+    /// Debug hook: send a file to the host a few seconds after the session
+    /// attaches, because the picker is a system sheet and a screenshot run has
+    /// no fingers.
+    ///
+    /// It runs the real path rather than a mock of it: the app mints a token,
+    /// PUTs the bytes to the daemon, and types back whatever path the daemon
+    /// answered with. So a still taken afterwards shows a real inbox path at a
+    /// real prompt, which is the only way to look at this feature working.
+    static var attachesAFile: Bool { mode == "liveattach" }
 
     /// Debug hook: attach, point the detail pane at a different machine, then
     /// point it back, so two stills of the same run can be compared. A session

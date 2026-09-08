@@ -6,6 +6,7 @@ compile_error!("the `harness` feature is dev-only; build it without --release");
 mod auth;
 mod config;
 mod doctor;
+mod files;
 mod install;
 mod pty;
 mod ring;

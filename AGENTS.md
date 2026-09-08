@@ -8,14 +8,14 @@ Also read as `CLAUDE.md`; the file is symlinked so both conventions find it.
 ## Commands
 
 ```sh
-cargo test --workspace                                   # 30 tests
+cargo test --workspace                                   # 90 tests
 cargo clippy --workspace --all-targets -- -D warnings     # must be silent
 cargo fmt --all
 
 cd ios && xcodegen generate                               # the .xcodeproj is generated, never edited
 xcodebuild -project Landline.xcodeproj -scheme Landline \
   -destination 'generic/platform=iOS Simulator' \
-  -skipPackagePluginValidation build                      # 224 tests via `test`
+  -skipPackagePluginValidation build                      # 235 tests via `test`
 ```
 
 `-skipPackagePluginValidation` is required: SwiftTerm ships a build-tool plugin
@@ -76,6 +76,10 @@ These will be declined however good the patch is. See `docs/SCOPE.md`.
 Screen sharing or remote desktop. A file manager or SFTP browser. Port
 forwarding. Android or web clients. A hosted service, accounts, or telemetry of
 any kind.
+
+The file inbox (`docs/FILES.md`) is not an exception to that second one and must
+not grow into it: one file, phone to host, one path handed back. No read
+endpoint, no directory listing, no caller-chosen destination.
 
 ## Setting the daemon up for a user
 

@@ -195,11 +195,11 @@ final class KeyBarLayoutTests: XCTestCase {
 
     // MARK: Default layout
 
-    /// The default row is today's bar plus the leader, so an existing user
-    /// opening this build sees no regression.
-    func testDefaultLayoutIsTodaysRowPlusTheLeader() {
+    /// The default row is today's bar plus the leader and the attachment key,
+    /// so an existing user opening this build sees no regression.
+    func testDefaultLayoutIsTodaysRowPlusTheLeaderAndAttach() {
         let ids = KeyBarKey.defaultLayout.map(\.catalogID)
-        XCTAssertEqual(ids, ["esc", "tab", "ctrl", "alt", "leader",
+        XCTAssertEqual(ids, ["esc", "tab", "file.attach", "ctrl", "alt", "leader",
                              "arrow.left", "arrow.down", "arrow.up", "arrow.right",
                              "sym.tilde", "sym.pipe", "sym.slash", "sym.hyphen"])
         XCTAssertEqual(KeyBarKey.defaultLayout.compactMap(\.resolved).count,
@@ -371,7 +371,7 @@ final class KeyBarLayoutTests: XCTestCase {
         let store = makeStore()
         XCTAssertEqual(store.keyBar.map(\.catalogID), KeyBarKey.defaultLayout.map(\.catalogID))
         XCTAssertTrue(store.isDefaultKeyBar)
-        XCTAssertEqual(store.resolvedKeyBar.count, 13)
+        XCTAssertEqual(store.resolvedKeyBar.count, KeyBarKey.defaultLayout.count)
     }
 
     func testStorePersistsAcrossInstances() {
@@ -382,7 +382,7 @@ final class KeyBarLayoutTests: XCTestCase {
         XCTAssertFalse(first.isDefaultKeyBar)
 
         let second = SettingsStore(fileURL: url)
-        XCTAssertEqual(second.keyBar.count, 14)
+        XCTAssertEqual(second.keyBar.count, KeyBarKey.defaultLayout.count + 1)
         XCTAssertEqual(second.keyBar.last?.label, "GS")
         XCTAssertEqual(second.keyBar.last?.resolved?.action,
                        .send(Array("git status".utf8) + [0x0a]))
@@ -436,7 +436,8 @@ final class KeyBarLayoutTests: XCTestCase {
         key.sequence = "^B"
         store.replace(key)
         XCTAssertEqual(store.keyBar[position].resolved?.action, .send([0x02]))
-        XCTAssertEqual(store.keyBar.count, 14, "editing does not append a second key")
+        XCTAssertEqual(store.keyBar.count, KeyBarKey.defaultLayout.count + 1,
+                       "editing does not append a second key")
     }
 
     /// Unresolvable slots stay in the file and stay out of the bar, so a
@@ -444,7 +445,7 @@ final class KeyBarLayoutTests: XCTestCase {
     func testUnresolvableSlotsAreKeptInStorageButNotDrawn() {
         let store = makeStore()
         store.append(KeyBarKey(catalogID: "sym.fromTheFuture"))
-        XCTAssertEqual(store.keyBar.count, 14)
-        XCTAssertEqual(store.resolvedKeyBar.count, 13)
+        XCTAssertEqual(store.keyBar.count, KeyBarKey.defaultLayout.count + 1)
+        XCTAssertEqual(store.resolvedKeyBar.count, KeyBarKey.defaultLayout.count)
     }
 }

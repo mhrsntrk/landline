@@ -128,6 +128,11 @@ one-command answer.
   arrows, punctuation, control codes, and your own key sequences. It also carries a tmux leader
   that latches like Ctrl, and tmux keys (new window, next, zoom, select window 1 to 9) that
   resolve against whichever leader that host uses, so one row is correct on every machine.
+- **A file key.** A phone cannot hand a file to a terminal, so the `FILE` key in the bar picks a
+  photo or a file, puts it in an inbox directory on that host, and types the path it landed at into
+  the session. Whatever is running there, a shell, an editor, or a coding agent, then has a real
+  path to a real file. HEIC becomes JPEG on the way, since most things on the far end cannot open
+  one. See [docs/FILES.md](docs/FILES.md); it is one file in one direction, not a file browser.
 - **`landline-cli`**, a raw-mode terminal test client that speaks the same protocol, for testing a
   host without a phone in your hand.
 
@@ -183,6 +188,10 @@ Any key you omit falls back to its default.
 | `scrollback_bytes` | `262144` | Per-session replay ring size. |
 | `max_sessions` | `8` | Concurrent session cap. |
 | `unlock_hash` | `""` | Argon2id PHC hash of the unlock secret. Empty means no unlock required. Write it with `set-unlock`, not by hand. |
+| `uploads_enabled` | `true` | Serve the file inbox. On by default because it grants strictly less than the shell the same credentials already grant. |
+| `upload_dir` | `""` | Where files from the phone land. Empty resolves to `~/.landline/inbox`. |
+| `upload_max_bytes` | `26214400` | Largest single upload, 25 MiB. |
+| `upload_ttl_hours` | `72` | How long an uploaded file is kept. `0` keeps them forever. |
 
 The config file is written with mode `0600` on Unix.
 
@@ -194,7 +203,7 @@ The config file is written with mode `0600` on Unix.
 | `landlined install` | Install the service unit: launchd plist, systemd user unit, or Windows scheduled task at logon. |
 | `landlined uninstall` | Remove it. |
 | `landlined status` | Daemon up? Session summary, tailscale backend state. |
-| `landlined doctor` | Full diagnosis: tailscale, backend, MagicDNS, serve mapping, listener, admin socket, allowlist, app url. |
+| `landlined doctor` | Full diagnosis: tailscale, backend, MagicDNS, serve mapping, listener, admin socket, allowlist, file inbox, app url. |
 | `landlined sessions list` | List live and detached sessions. |
 | `landlined sessions kill <id>` | Terminate one session. |
 | `landlined config-path` | Print the config file path. |
@@ -252,7 +261,8 @@ see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Non-goals
 
 Stated up front so they stay dead: no screen sharing or remote desktop, ever. No file manager or
-SFTP browser. No port forwarding UI. No Android, no web client, no desktop client. No hosted
+SFTP browser: sending one file to a host and getting its path back is the whole of what this does
+with files, and browsing a remote filesystem is not on the way to it. No port forwarding UI. No Android, no web client, no desktop client. No hosted
 service, no accounts, no backend to trust. No multi-user or team features: one person, N machines.
 
 ## Using an agent
@@ -268,6 +278,7 @@ the failure modes that are easy to misdiagnose.
 
 - [docs/SCOPE.md](docs/SCOPE.md): what this is, non-goals, architecture, security model, session design.
 - [docs/PROTOCOL.md](docs/PROTOCOL.md): wire protocol version 1, normative.
+- [docs/FILES.md](docs/FILES.md): the file inbox HTTP endpoints, normative.
 - [docs/ROADMAP.md](docs/ROADMAP.md): what is next.
 - [SECURITY.md](SECURITY.md): reporting a vulnerability.
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to build, test and submit changes.

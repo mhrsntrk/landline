@@ -70,6 +70,23 @@ after 10 failures the daemon refuses every further unlock attempt until it is re
 The iOS app also gates on Face ID or the device passcode when it comes to the foreground. That is
 a client-side convenience, not a boundary. The unlock secret is the real gate.
 
+**6. The file inbox sits behind all five of the above.** `POST /v1/token` and
+`PUT /v1/files/{name}` (`docs/FILES.md`) are served on the same listener, through the same serve
+mapping, and check the same login allowlist and the same unlock secret. The secret buys a
+short-lived bearer token held only in the daemon's memory, so it is verified once per session
+rather than once per upload and never travels on the upload itself. Wrong guesses at the token
+endpoint spend the same failure budget as the shell handshake, so brute forcing one locks out the
+other.
+
+The inbox is the one thing in this daemon that is on by default, and that is deliberate rather than
+an oversight: it grants strictly less than what the same credentials already grant. Anyone through
+those five layers has an interactive shell, which can write any file anywhere on the machine.
+Writing bytes into one directory is a subset of that. What the endpoints must therefore never do is
+widen the surface, so there is no read endpoint, no directory listing, and no caller-controlled
+destination: the daemon derives the file name itself, always appends a random suffix, never
+overwrites, and writes into `upload_dir` and nowhere else. Set `uploads_enabled = false` on a host
+that should not carry the endpoints at all.
+
 ## Known limitations
 
 These are real, they are not theoretical, and none of them are hidden further down.
@@ -122,6 +139,12 @@ so check it yourself if the machine has other accounts on it.
 file, mode 0700, with no authentication of its own. Anything running as your user can list and
 kill sessions through it. It cannot spawn a session or read output.
 
+**An upload writes to the host's disk, and nothing bounds the total.** Each file is capped at
+`upload_max_bytes` and swept after `upload_ttl_hours`, but there is no quota on the inbox as a
+whole. This is not treated as a limitation to fix, because the same credentials already grant a
+shell that can fill the disk in one command; a quota here would be theatre. Set
+`uploads_enabled = false` if the endpoint should not exist on that machine.
+
 **Replay artifacts are not a security property.** The clear-screen sequence sent before a replay is
 cosmetic. Do not read it as scrubbing anything.
 
@@ -163,8 +186,8 @@ For anyone running `landlined` on a machine that matters:
 
 5. **Run `landlined doctor` after any change** to the config, to serve, or to your tailnet policy.
    It checks the tailscale binary, the backend state, MagicDNS, the serve mapping, the daemon's
-   listener, the admin socket, whether anyone is actually allowed in, and the URL to enter in the
-   app. Serve configuration is per-machine state that drifts, and "why can I not reach the laptop"
+   listener, the admin socket, whether anyone is actually allowed in, where the file inbox lands
+   and whether it is writable, and the URL to enter in the app. Serve configuration is per-machine state that drifts, and "why can I not reach the laptop"
    should have a one-command answer.
 
 6. **Lower `session_ttl_hours` and `scrollback_bytes`** if detached sessions holding terminal output

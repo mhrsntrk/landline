@@ -416,6 +416,7 @@ struct KeyBarCatalogView: View {
         switch entry.action {
         case .send(let template): return KeySequence.hex(template)
         case .latchCtrl, .latchAlt, .latchLeader: return "LATCHES"
+        case .attachFile: return "SENDS A FILE"
         }
     }
 }

@@ -33,6 +33,11 @@ struct KeyBar: View {
     /// it does not scroll under a finger that is trying to scroll the page.
     var send: (([UInt8]) -> Void)?
 
+    /// Opens the attachment picker. Nil disables the `FILE` key, which is what
+    /// a specimen bar and a host with no live session both want: a key that
+    /// cannot do its job has to look switched off rather than pressable.
+    var attach: (() -> Void)?
+
     @Environment(\.displayScale) private var displayScale
 
     /// Keys look small; the touch target never is. 44pt is the floor in both
@@ -144,7 +149,23 @@ struct KeyBar: View {
             latch(key, isOn: $altLatched)
         case .latchLeader:
             latch(key, isOn: $leaderLatched, enabled: leaderByte != nil)
+        case .attachFile:
+            attachKey(key)
         }
+    }
+
+    /// The one key that opens a sheet instead of putting bytes on the wire, and
+    /// so the one cell that draws a mark instead of printing a word. See
+    /// `PageMark`.
+    private func attachKey(_ key: ResolvedKey) -> some View {
+        Button {
+            attach?()
+        } label: {
+            PageMark()
+        }
+        .buttonStyle(KeyCellStyle(latched: false))
+        .disabled(attach == nil)
+        .accessibilityLabel(Text(key.accessibility))
     }
 
     /// The bytes are worked out here rather than when the layout was read,
