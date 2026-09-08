@@ -729,8 +729,12 @@ final class HostReachability {
         for host in hosts where !host.hostname.isEmpty {
             diagnoses[host.id] = .checking
             Task { [weak self] in
-                let diagnosis = await Self.probeOne(host: host, session: self?.session ?? .shared)
-                await MainActor.run { self?.diagnoses[host.id] = diagnosis }
+                // Bound once rather than reached for on both sides of the
+                // suspension: capturing the var and reading it twice across an
+                // await is a warning today and an error in Swift 6.
+                guard let self else { return }
+                let diagnosis = await Self.probeOne(host: host, session: self.session)
+                await MainActor.run { self.diagnoses[host.id] = diagnosis }
             }
         }
     }

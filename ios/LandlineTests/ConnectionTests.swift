@@ -81,6 +81,21 @@ final class ConnectionTests: XCTestCase {
         host = Host(name: "studio", hostname: "studio.tail1234.ts.net")
     }
 
+    /// Retires the connection between tests.
+    ///
+    /// Without this a test that ends mid-backoff leaves a live reconnect timer
+    /// on a `Connection` nothing has released, and the *next* test's run-loop
+    /// pump fires it: a socket appears on the shared counter that the running
+    /// test never asked for. It passed locally, where the timing rarely lined
+    /// up, and failed in CI, which is exactly the failure this job exists to
+    /// catch.
+    override func tearDown() {
+        connection?.disconnect(sendDetach: false)
+        connection = nil
+        FakeTransport.reset()
+        super.tearDown()
+    }
+
     private func attach(_ transport: FakeTransport, session: String = "s-1") {
         transport.deliverJSON(type: 0x82, """
         {"session_id":"\(session)","cols":80,"rows":24,"replay_bytes":0,        "shell":"/bin/zsh","host":"studio","created_at":0}

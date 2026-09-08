@@ -75,6 +75,9 @@ Each of these cost real time. They are listed because they will recur.
 - **`stapler` cannot staple a CLI.** It writes tickets onto `.app`, `.dmg` and `.pkg` only, and
   refuses both a bare Mach-O and a zip containing one. Notarize the zip and let Gatekeeper fetch
   the ticket online; do not add a staple step back.
+- **Retire a `Connection` in `tearDown`.** A test that ends mid-backoff leaves a live reconnect
+  timer on an object nothing released, and the next test's run-loop pump fires it, opening a socket
+  that test never asked for. Passes locally where the timing rarely lines up; fails in CI.
 - **A dying socket delivers one failure per frame in flight.** Anything that treats a transport
   failure as an event rather than as a state has to retire the socket's epoch first, or a handful
   of queued keystrokes each count as their own reconnect attempt.
