@@ -8,14 +8,14 @@ Also read as `CLAUDE.md`; the file is symlinked so both conventions find it.
 ## Commands
 
 ```sh
-cargo test --workspace                                   # 107 tests
+cargo test --workspace                                   # 111 tests
 cargo clippy --workspace --all-targets -- -D warnings     # must be silent
 cargo fmt --all
 
 cd ios && xcodegen generate                               # the .xcodeproj is generated, never edited
 xcodebuild -project Landline.xcodeproj -scheme Landline \
   -destination 'generic/platform=iOS Simulator' \
-  -skipPackagePluginValidation build                      # 283 tests via `test`
+  -skipPackagePluginValidation build                      # 288 tests via `test`
 ```
 
 `-skipPackagePluginValidation` is required: SwiftTerm ships a build-tool plugin

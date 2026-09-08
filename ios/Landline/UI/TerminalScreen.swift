@@ -658,7 +658,7 @@ struct TerminalScreen: View {
         let target = liveHost
         // The same secret the shell handshake uses. A host with no unlock sends
         // an empty one, which the daemon accepts because its gate is not armed.
-        let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
+        let secret = connection.unlockedSecret ?? Keychain.unlockSecret(hostID: target.id) ?? ""
         Task {
             do {
                 let path = try await api.upload(
@@ -759,7 +759,7 @@ struct TerminalScreen: View {
     @MainActor
     private func refreshOffers() async {
         let target = liveHost
-        let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
+        let secret = connection.unlockedSecret ?? Keychain.unlockSecret(hostID: target.id) ?? ""
         // Silent on failure. This is a background courtesy, and a host running
         // a daemon too old to know the endpoint must not put an error band over
         // a working session.
@@ -771,7 +771,7 @@ struct TerminalScreen: View {
         fetchingOffer = true
         defer { fetchingOffer = false }
         let target = liveHost
-        let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
+        let secret = connection.unlockedSecret ?? Keychain.unlockSecret(hostID: target.id) ?? ""
         do {
             let url = try await api.fetchOffer(offer, on: target, secret: secret)
             // Withdrawn on success: it has been picked up, and an offer that
@@ -787,7 +787,7 @@ struct TerminalScreen: View {
     @MainActor
     private func withdraw(_ offer: HostOffer) async {
         let target = liveHost
-        let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
+        let secret = connection.unlockedSecret ?? Keychain.unlockSecret(hostID: target.id) ?? ""
         try? await api.withdrawOffer(id: offer.id, on: target, secret: secret)
         offers.removeAll { $0.id == offer.id }
     }
@@ -1001,7 +1001,7 @@ struct TerminalScreen: View {
         case .needsUnlock(let attemptsLeft):
             unlockAttemptsLeft = attemptsLeft
             // Keychain first; only ask a human if the machine cannot answer.
-            if !triedKeychainSecret, let secret = Keychain.unlockSecret(hostID: host.id) {
+            if !triedKeychainSecret, let secret = connection.unlockedSecret ?? Keychain.unlockSecret(hostID: host.id) {
                 triedKeychainSecret = true
                 connection.send(.unlock(secret))
             } else {
@@ -1033,6 +1033,8 @@ struct TerminalScreen: View {
     }
 
     private func reconnect() {
+        // An explicit reconnect also retries an HTTP refusal from the old link.
+        api = HostAPI()
         triedKeychainSecret = false
         typedSecret = ""
         marksProgress = 0

@@ -261,13 +261,13 @@ impl SessionManager {
         // admin socket, the reaper, and the pump's own exit-removal, all of
         // which want this lock.
         {
-            let sessions = self.inner.sessions.read().unwrap();
+            let sessions = self.inner.sessions.write().unwrap();
             if sessions.len() + self.inner.pending.load(Ordering::SeqCst) >= self.inner.max_sessions
             {
                 return Err(AttachError::TooManySessions);
             }
+            self.inner.pending.fetch_add(1, Ordering::SeqCst);
         }
-        self.inner.pending.fetch_add(1, Ordering::SeqCst);
         // Whatever happens next, the reservation is released exactly once.
         let _reservation = PendingSlot {
             inner: Arc::clone(&self.inner),
@@ -294,11 +294,12 @@ impl SessionManager {
             last_seen: AtomicI64::new(now),
             size: Mutex::new((args.cols, args.rows)),
         });
-        self.inner
-            .sessions
-            .write()
-            .unwrap()
-            .insert(session.id, Arc::clone(&session));
+        {
+            let mut sessions = self.inner.sessions.write().unwrap();
+            sessions.insert(session.id, Arc::clone(&session));
+            // Transfer the reservation under the same lock used by admission.
+            drop(_reservation);
+        }
         spawn_pump(Arc::clone(&self.inner), Arc::clone(&session), events);
         tracing::info!(id = %session.id, shell = %session.shell, "session created");
         Ok(session)
@@ -506,5 +507,56 @@ mod reaper_tests {
         *session.attached.lock().unwrap() = None;
         session.last_seen.store(0, Ordering::SeqCst);
         assert!(stale_sessions(&manager.inner, i64::MAX, i64::MAX).is_empty());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod concurrency_tests {
+    use super::*;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_creation_respects_one_session_cap() {
+        for round in 0..10 {
+            let manager = SessionManager::new(1, 1024);
+            let barrier = Arc::new(std::sync::Barrier::new(16));
+            let handle = tokio::runtime::Handle::current();
+            let mut threads = Vec::new();
+            for _ in 0..16 {
+                let manager = manager.clone();
+                let barrier = barrier.clone();
+                let handle = handle.clone();
+                threads.push(std::thread::spawn(move || {
+                    let _guard = handle.enter();
+                    barrier.wait();
+                    manager
+                        .attach(AttachArgs {
+                            session_id: None,
+                            program: "/bin/sh".into(),
+                            args: vec![],
+                            cwd: None,
+                            cols: 80,
+                            rows: 24,
+                        })
+                        .ok()
+                }));
+            }
+            let attachments: Vec<_> = threads
+                .into_iter()
+                .filter_map(|t| t.join().unwrap())
+                .collect();
+            let count = attachments.len();
+            for a in &attachments {
+                a.session.kill();
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                while !manager.list().is_empty() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            assert!(
+                count <= 1,
+                "round {round}: created {count} sessions with max_sessions=1"
+            );
+        }
     }
 }

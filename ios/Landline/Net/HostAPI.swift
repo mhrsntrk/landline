@@ -62,6 +62,8 @@ actor HostAPI {
 
     /// Per host, because a phone reaches several and a token is minted for one.
     private var grants: [UUID: Grant] = [:]
+    /// A failed mint is not retried by background polling with the same secret.
+    private var refusals: [UUID: (secret: String, error: UploadError)] = [:]
     private let session: URLSession
 
     init(session: URLSession = .shared) {
@@ -117,20 +119,46 @@ actor HostAPI {
     /// the host felt like sending and the phone has to hand a URL to QuickLook
     /// anyway.
     func fetchOffer(_ offer: HostOffer, on host: Host, secret: String) async throws -> URL {
-        let body = try await send(method: "GET", path: "/v1/outbox/\(offer.id)",
-                                  host: host, secret: secret)
-        let directory = HostAPI.offersDirectory
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        // Named as the host named it, so the share sheet and QuickLook show the
-        // file someone actually sent rather than a hex id. The offer id goes in
-        // its own subdirectory rather than into the name: two offers called
-        // `report.pdf` must not overwrite each other, and a QuickLook still
-        // open on the first must not silently start showing the second.
-        let slot = directory.appendingPathComponent(offer.id, isDirectory: true)
-        try? FileManager.default.createDirectory(at: slot, withIntermediateDirectories: true)
-        let url = slot.appendingPathComponent(HostAPI.pathSegment(for: offer.name))
-        try body.write(to: url, options: .atomic)
+        var grant = try await token(for: host, secret: secret, forceRefresh: false)
+        let downloaded: URL
+        do {
+            downloaded = try await downloadOffer(offer, host: host, grant: grant)
+        } catch UploadError.server(status: 401) {
+            grant = try await token(for: host, secret: secret, forceRefresh: true)
+            downloaded = try await downloadOffer(offer, host: host, grant: grant)
+        }
+        defer { try? FileManager.default.removeItem(at: downloaded) }
+        let slot = Self.offersDirectory.appendingPathComponent(Self.pathSegment(for: offer.id), isDirectory: true)
+        try FileManager.default.createDirectory(at: slot, withIntermediateDirectories: true)
+        let url = slot.appendingPathComponent(Self.pathSegment(for: offer.name))
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        try FileManager.default.moveItem(at: downloaded, to: url)
         return url
+    }
+
+    private func downloadOffer(_ offer: HostOffer, host: Host, grant: Grant) async throws -> URL {
+        var request = URLRequest(url: host.apiURL(path: "/v1/outbox/\(offer.id)"))
+        request.timeoutInterval = 300
+        request.setValue("Bearer \(grant.token)", forHTTPHeaderField: "Authorization")
+        let file: URL
+        let response: URLResponse
+        do {
+            (file, response) = try await session.download(for: request)
+        } catch {
+            throw UploadError.transport(Self.reason(for: error))
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else {
+            try? FileManager.default.removeItem(at: file)
+            switch status {
+            case 403: throw UploadError.unauthorized
+            case 404: throw UploadError.disabled
+            default: throw UploadError.server(status: status)
+            }
+        }
+        return file
     }
 
     /// Where fetched offers land.
@@ -239,11 +267,16 @@ actor HostAPI {
     /// next upload does not spend a grant minted with the old one.
     func forget(host: UUID) {
         grants[host] = nil
+        refusals[host] = nil
     }
 
     // MARK: Internals
 
     private func token(for host: Host, secret: String, forceRefresh: Bool) async throws -> Grant {
+        if let refusal = refusals[host.id], refusal.secret == secret {
+            throw refusal.error
+        }
+        refusals[host.id] = nil
         // A 30 second margin: a token that expires mid-upload is a failure the
         // retry path would have to cover anyway, and not using it is cheaper.
         if !forceRefresh, let cached = grants[host.id], cached.expires > Date().addingTimeInterval(30) {
@@ -280,12 +313,15 @@ actor HostAPI {
         case 401:
             struct ErrResp: Decodable { let attemptsLeft: Int? }
             let attempts = (try? JSONDecoder.snakeCase.decode(ErrResp.self, from: body))?.attemptsLeft
-            throw UploadError.badSecret(attemptsLeft: attempts ?? 0)
+            let error = UploadError.badSecret(attemptsLeft: attempts ?? 0)
+            refusals[host.id] = (secret, error)
+            throw error
         case 403:
             throw UploadError.unauthorized
         case 404:
             throw UploadError.disabled
         case 429:
+            refusals[host.id] = (secret, .lockedOut)
             throw UploadError.lockedOut
         case let status:
             throw UploadError.server(status: status)
