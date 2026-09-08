@@ -7,7 +7,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The outbox served a fetch by reading the whole file into memory with a blocking call, so a large
+  offer could take the daemon down and every live session with it. It streams now.
+- A session whose child exited could leave its client hanging forever when the EXIT frame was
+  dropped. The exit path now closes the channel, so the connection tears down either way.
+- The registry write lock was held across `fork`/`exec`, stalling session listings, the admin
+  socket and the reaper behind a slow shell start.
+- The unlock backoff delayed the reply rather than the next attempt, so a caller that hung up never
+  waited it out. The WebSocket UNLOCK frame also accepted a 1 MiB secret where the HTTP door capped
+  at 1024.
+- On the phone: a dying socket's in-flight frames each counted as a reconnect attempt; automatic
+  reconnect walked into the manual unlock prompt despite a stored secret; a session that recovered
+  from SESSION_GONE once refused to recover again; several async handlers wrote view state off the
+  main actor; an upload that landed while the link was down cleared its band and lost the path; a
+  5xx from `tailscale serve` read as a healthy host; fetched files accumulated in tmp forever.
+- The Swift codec accepted a PONG of any length where the spec and the Rust codec pin it at 8.
+
 ### Added
+
+- macOS release binaries are signed with a Developer ID and notarized
+  (`packaging/sign-macos.sh`), shipped as a `.zip` beside the plain binary.
+- A Debian package, which the changelog has claimed since 0.1.0 and nothing built.
+- CI runs the iOS test suite and a dependency advisory scan, neither of which it did before.
 
 - Sessions over HTTP: `GET /v1/sessions` and `DELETE /v1/sessions/{id}`, and a session list per
   host in the app with resume and kill. The daemon has always known what is running; only a process
@@ -63,11 +86,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Optional per-host unlock secret, argon2id hashed, with exponential backoff on repeated
   failures.
 - Admin unix socket and `landlined sessions` for listing and killing sessions from the CLI.
-- File inbox: `POST /v1/token` and `PUT /v1/files/{name}` on the daemon, and a `FILE` key in the
-  app's key bar that picks a photo or a file, uploads it, and types the path it landed at into the
-  session. Documented in `docs/HTTP.md`.
-- `landlined doctor`, diagnosing tailscaled, MagicDNS, serve mapping, listener health, and the
-  file inbox.
+- `landlined doctor`, diagnosing tailscaled, MagicDNS, serve mapping, and listener health.
 - Service installation for macOS (launchd), Linux (systemd), and Windows (scheduled task at
   logon).
 - `landline-cli`, a terminal test client for connecting to the daemon without the iOS app.

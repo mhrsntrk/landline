@@ -63,9 +63,9 @@ does not know, and an older daemon omits the field entirely.
 |---|---|
 | 200 | Token minted, valid for `expires_in` seconds |
 | 401 | Wrong secret. Body carries `attempts_left` |
+| 400 | The body is longer than 1024 bytes |
 | 403 | This login is not in `allowed_logins` |
-| 404 | Uploads are not served here |
-| 429 | The unlock failure budget is spent |
+| 429 | The unlock failure budget is spent, for 15 minutes |
 
 The secret is checked by the same `UnlockGate` the shell handshake uses, so
 wrong guesses here serve the same backoff and spend the same budget, and
@@ -118,7 +118,7 @@ sitting at when it matters.
 
 ### `DELETE /v1/sessions/{id}`
 
-`204` on success, `404` for an id that is not running. Killing is the honest
+`204` on success, `404` for an id that is not running, `400` for one that is not a uuid. Killing is the honest
 verb: the child process is terminated and whatever was in it dies with it,
 exactly as `landlined sessions kill` does.
 

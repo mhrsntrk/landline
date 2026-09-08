@@ -5,3 +5,6 @@ xcuserdata/
 
 build/
 *.xcarchive
+
+# Generated from raw/video by stage-previews.sh; identical bytes, so not tracked.
+screenshots/*/APP_*/preview.mp4

@@ -65,7 +65,7 @@ file and never stored on the host in plaintext. It is verified in-band during th
 handshake, **before any PTY is spawned**, and it is per connection, not per session: resuming an
 existing session over a new connection requires unlocking again, so a stolen session id on its own
 is worth nothing. Wrong secrets serve an exponential backoff (`min(2^failures * 500ms, 60s)`), and
-after 10 failures the daemon refuses every further unlock attempt until it is restarted.
+after 10 failures the gate shuts for 15 minutes, then reopens with a fresh budget.
 
 The iOS app also gates on Face ID or the device passcode when it comes to the foreground. That is
 a client-side convenience, not a boundary. The unlock secret is the real gate.
@@ -121,10 +121,13 @@ that terminal, which includes secrets you echoed, tokens a command printed, and 
 here-doc. It is replayed to whoever successfully attaches to that session id, and it is present in
 the daemon's memory (and therefore in any core dump of it) until the session is reaped.
 
-**Unlock lockout is daemon-wide and needs a restart.** The failure counter is global, not per
-connection and not per login, and the lockout persists until `landlined` is restarted. That is
-deliberate for brute-force resistance, but it also means a caller who can reach the unlock stage
-can lock you out of your own host until you restart the daemon.
+**Unlock lockout is daemon-wide.** The failure counter is global, not per connection and not per
+login. That is deliberate for brute-force resistance, but it also means anyone who can reach the
+unlock stage can spend the budget and shut the gate on you. The lockout lasts 15 minutes and then
+reopens with a fresh budget, rather than persisting until the daemon restarts: a permanent one
+would itself be the denial of service, since restarting the daemon is the one thing you cannot do
+from the phone that is locked out. The cost is that guessing resumes after the window, so the
+secret still has to be worth guessing at ten tries per quarter hour.
 
 **The unlock secret is stored in the iOS Keychain.** The app keeps one generic-password item per
 host so you do not retype the secret on every reconnect. It is protected by Keychain, which means
@@ -156,6 +159,13 @@ without the login and the secret, which already grant a shell that can read the 
 whole. This is not treated as a limitation to fix, because the same credentials already grant a
 shell that can fill the disk in one command; a quota here would be theatre. Set
 `uploads_enabled = false` if the endpoint should not exist on that machine.
+
+**The macOS binaries are signed but the plain ones are not stapled.** Release zips are signed with
+a Developer ID certificate and notarized by Apple (`packaging/sign-macos.sh`, run from a machine
+holding the key rather than from CI, so the private key never becomes a repository secret). They
+carry no stapled ticket, because `stapler` writes tickets onto `.app`, `.dmg` and `.pkg` only and
+refuses both a bare Mach-O and a zip. Gatekeeper fetches the ticket online on first run instead,
+so a first launch on a machine with no network falls back to the unsigned path.
 
 **Replay artifacts are not a security property.** The clear-screen sequence sent before a replay is
 cosmetic. Do not read it as scrubbing anything.

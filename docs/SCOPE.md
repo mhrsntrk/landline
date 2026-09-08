@@ -179,6 +179,11 @@ Set it on the Ubuntu server. Probably skip it on the laptop. Make it per-host, n
 
 ## 5. Wire protocol
 
+> The normative spec is `docs/PROTOCOL.md`, and the two implementations that must agree with it are
+> `crates/landline-proto/src/frame.rs` and `ios/Landline/Protocol/Frame.swift`. What follows is a
+> design sketch kept for the reasoning behind the shape; it is deliberately not a fourth copy to
+> keep in sync, so where it disagrees with `docs/PROTOCOL.md`, that file wins.
+
 One WebSocket. Binary frames. Freeze this at M0 and change it only with a version bump.
 
 ```
@@ -262,10 +267,12 @@ landlined serve                 # foreground, what the service unit runs
 landlined install               # launchd plist / systemd unit / Windows scheduled task at logon
 landlined uninstall
 landlined status                # running? sessions? tailscale serve configured?
-landlined doctor                # verify tailscale up, serve mapping, ACL reachability, perms
+landlined doctor                # tailscale, backend, MagicDNS, serve mapping, listener,
+                                # admin socket, allowlist, file inbox, app url
 landlined sessions list
 landlined sessions kill <id>
-landlined config path
+landlined send <path>           # offer a file to the phone; see docs/HTTP.md
+landlined config-path
 landlined set-unlock            # prompt, argon2id hash into config
 ```
 
@@ -281,12 +288,18 @@ TOML, at `~/.config/landline/config.toml`, `~/Library/Application Support/landli
 listen            = "127.0.0.1:7777"   # loopback TCP; see 4.3 on why not a unix socket
 allowed_logins    = ["you@example.com"]
 shell             = ""                  # empty = $SHELL; on Windows pwsh, then powershell.exe
-default_cmd       = ""                  # e.g. "tmux new -A -s main"; runs as `$SHELL -i -c`, so aliases resolve
+default_cmd       = ""                  # e.g. "tmux new -A -s main"; runs as `$SHELL -l -i -c`
 session_ttl_hours = 24
 scrollback_bytes  = 262144
 max_sessions      = 8
 unlock_hash       = ""                  # argon2id, empty = no unlock secret
+uploads_enabled   = true                # the file inbox; see docs/HTTP.md
+upload_dir        = ""                  # empty = ~/.landline/inbox
+upload_max_bytes  = 26214400            # 25 MiB
+upload_ttl_hours  = 72                  # 0 keeps uploads and offers forever
 ```
+
+The authoritative list is the table in `README.md`; this block is here to show the shape.
 
 ## 8. iOS app scope
 

@@ -43,10 +43,15 @@ the daemon's `default_cmd` config key, then the shell. A blank value counts as a
 each step.
 
 A command from either source is not executed directly, it is handed to the resolved shell
-in interactive mode: `<shell> -i -c "<cmd>"` on Unix. Interactive mode is what sources the
-rc files, so aliases, shell functions, and rc-file `PATH` entries resolve exactly as they
-do in a terminal (`"cmd": "ll"` works when `ll` is a shell alias; without `-i` it
-would fail with "command not found"). On Windows, PowerShell has no `-i`, so pwsh and
+as a login shell in interactive mode: `<shell> -l -i -c "<cmd>"` on Unix.
+
+Both flags are load-bearing. `-i` sources the interactive rc file, so aliases, shell
+functions and rc-file `PATH` entries resolve exactly as they do in a terminal (`"cmd":
+"ll"` works when `ll` is a shell alias; without `-i` it fails with "command not found").
+`-l` sources the login profile, which is where `PATH` is usually assembled, including
+Homebrew's `shellenv`: the daemon runs under launchd or systemd, which hand it a minimal
+environment rather than a shell's, so without `-l` an alias resolves and then dies on a
+command that is not on the path. On Windows, PowerShell has no `-i`, so pwsh and
 powershell get `-NoExit -Command "<cmd>"` and cmd.exe gets `/K "<cmd>"`, both of which run
 the command and leave the user at a prompt.
 

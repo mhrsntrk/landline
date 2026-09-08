@@ -84,7 +84,7 @@ user can do that; wait for them rather than working around it.
 landlined doctor
 ```
 
-Nine checks. Every one must pass. The last line prints the exact
+Nine checks on macOS and Linux, eight on Windows, which has no admin socket. Every one must pass. The last line prints the exact
 `wss://<machine>.<tailnet>.ts.net/v1/shell` URL, and the hostname in it is what
 the user types into the app.
 

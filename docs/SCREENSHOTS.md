@@ -29,9 +29,12 @@ xcodebuild -project ios/Landline.xcodeproj -scheme Landline -configuration Debug
 ios/screenshots/capture.sh all                   # ~12 min, both devices
 ios/screenshots/record.sh all                    # ~4 min, both previews
 python3 ios/screenshots/compose.py               # dresses stills into en-US/ and ko/
-cp ios/screenshots/raw/video/iphone.mp4 ios/screenshots/en-US/APP_IPHONE_67/preview.mp4
-# ...and the other three, see the tree above
+ios/screenshots/stage-previews.sh                # copies raw/video into en-US/ and ko/
 ```
+
+The per-locale `preview.mp4` files are generated, not tracked: they are byte-identical to
+`raw/video/`, and committing them meant the same two videos lived in the repository three
+times each.
 
 Then upload. The layout is what `ascelerate apps media upload` expects, and files sort
 alphabetically into gallery order, which is why the stills are `01_` to `0N_` and the

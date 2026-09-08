@@ -112,8 +112,22 @@ if [ -z "$install_dir" ]; then
 fi
 
 install_path="${install_dir}/landlined"
-cp "$bin_path" "$install_path"
-chmod +x "$install_path"
+chmod +x "$bin_path"
+# `mv`, not `cp`. The common case for this script is an upgrade, and on Linux
+# copying over the path of a running daemon fails outright with ETXTBSY; on
+# macOS overwriting a running binary in place can invalidate its signature and
+# get the process killed. A rename replaces the directory entry and leaves the
+# running process on its own inode, which is exactly what an upgrade wants.
+# Same filesystem, since both are under the download directory's parent, so
+# this is atomic.
+if ! mv -f "$bin_path" "$install_path" 2>/dev/null; then
+    # Different filesystems: fall back to a copy through a temporary name in
+    # the destination directory, then rename over the target.
+    tmp_install="${install_path}.new.$$"
+    cp "$bin_path" "$tmp_install"
+    chmod +x "$tmp_install"
+    mv -f "$tmp_install" "$install_path"
+fi
 
 say "landline install: installed to ${install_path}"
 

@@ -9,7 +9,12 @@ options:
 packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
-    from: 1.2.0
+    # Pinned exactly, not `from:`. `Package.resolved` lives inside the
+    # generated .xcodeproj, which is gitignored, so a floating range meant
+    # every fresh `xcodegen generate` could resolve a newer SwiftTerm and ship
+    # terminal-emulator code nobody had tested, with no diff in the repo to
+    # show for it. Bump this line deliberately.
+    exactVersion: 1.20.0
 
 targets:
   Landline:
@@ -27,6 +32,13 @@ targets:
         # bakes literals into the generated Info.plist, so bumping
         # CURRENT_PROJECT_VERSION silently ships the old build number and the
         # upload is rejected as a duplicate.
+        #
+        # CURRENT_PROJECT_VERSION is still set by hand below. Deriving it from
+        # `git rev-list --count HEAD` was considered and rejected: App Store
+        # Connect refuses a build number that is not strictly greater than the
+        # last one, and a commit count can go down on a rebase or a
+        # squash-merge, which would wedge uploads with a rejection whose cause
+        # is nowhere near the error. Bump it deliberately.
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         ITSAppUsesNonExemptEncryption: false
