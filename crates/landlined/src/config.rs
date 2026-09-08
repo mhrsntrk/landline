@@ -442,13 +442,23 @@ mod tests {
 
     #[test]
     fn upload_dir_keeps_an_absolute_path() {
+        // What counts as absolute is the platform's business, not this
+        // module's: `/srv/x` has no drive letter and so is *not* absolute on
+        // Windows, where it is anchored to the home directory like any other
+        // relative path. That is the wanted behaviour, and writing the test
+        // per platform is what says so.
+        #[cfg(unix)]
+        let absolute = "/srv/landline-inbox";
+        #[cfg(windows)]
+        let absolute = r"C:\landline-inbox";
+
         let config = Config {
-            upload_dir: "/srv/landline-inbox".to_string(),
+            upload_dir: absolute.to_string(),
             ..Config::default()
         };
         assert_eq!(
             config.resolve_upload_dir().expect("resolve"),
-            PathBuf::from("/srv/landline-inbox")
+            PathBuf::from(absolute)
         );
     }
 
