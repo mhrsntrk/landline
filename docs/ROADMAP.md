@@ -38,12 +38,22 @@ ship independently and version skew is the normal case.
 - Local admin socket for session listing and killing, backing `landlined sessions list` and
   `landlined sessions kill`.
 - Session reaper that tears down sessions idle past `session_ttl_hours`.
-- `landlined doctor`, eight checks covering the tailscale binary, backend state, MagicDNS, the
-  serve mapping, the daemon's own listener, the admin socket, whether any login is allowed in, and
-  the URL to type into the app. Serve config is per-machine state that drifts, so "why can I not
+- `landlined doctor`, nine checks covering the tailscale binary, backend state, MagicDNS, the
+  serve mapping, the daemon's own listener, the admin socket, whether any login is allowed in,
+  where the file inbox lands and whether it is writable, and the URL to type into the app. Serve config is per-machine state that drifts, so "why can I not
   reach that host" needed a one-command answer.
 - `landlined install` / `uninstall`, writing a launchd plist on macOS, a systemd unit on Linux, and
   a scheduled task at logon on Windows (a session-0 service cannot host ConPTY sanely).
+
+**The file inbox.** A phone cannot hand a file to a terminal, so `POST /v1/token` and
+`PUT /v1/files/{name}` put one in a directory on the host and answer with the absolute path it
+landed at, which the app types into the running session. Same listener, same serve mapping, same
+login allowlist and unlock secret as the shell. Streamed and capped, name and destination chosen by
+the daemon rather than the caller, never overwriting, swept after a TTL. Specified in
+`docs/FILES.md`. In the app it is one key in the bar, `FILE`, and the picker behind it.
+
+Not a step towards a file browser: there is no read endpoint and no listing, and there will not be
+one.
 
 **CLI test client (`landline-cli`).** A real terminal client for the daemon: attach or resume, raw
 mode, bytes both ways. It exists so the host side can be developed and debugged without an iPhone
@@ -106,7 +116,9 @@ These are closed, not deferred. Please do not open issues asking for them.
 
 - **Screen sharing or remote desktop.** Terminal only, forever. If you need a desktop, use Screen
   Sharing or RustDesk.
-- **File manager, SFTP browser, or port forwarding UI.**
+- **File manager, SFTP browser, or port forwarding UI.** The file inbox above is the whole of what
+  this app will ever do with files: one file, one direction, one path handed back. Browsing a
+  remote filesystem is not on the way to anything here.
 - **Android, web client, or desktop client.** iOS only.
 - **A hosted service, accounts, or any backend.** There is no server to trust because there is no
   server.

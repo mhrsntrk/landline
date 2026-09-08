@@ -99,6 +99,15 @@ For `PROTOCOL_VERSION`, `message` lists supported versions, e.g. `"supported: 1"
    KILL terminates the child process; the server then sends EXIT and closes.
 7. When the child exits on its own, server sends EXIT and closes; the session is gone.
 
+## Beside the protocol
+
+`GET /v1/shell` is the only WebSocket endpoint and the only thing this document
+governs. The daemon also serves two plain HTTP endpoints on the same listener,
+`POST /v1/token` and `PUT /v1/files/{name}`, which move a file from the phone
+onto the host. They are specified in `docs/FILES.md` and are deliberately not
+frames: version 1 is frozen and caps a payload at 1 MiB, and bulk data on the
+socket carrying the terminal would stall typing behind it.
+
 ## Transport notes
 
 - The daemon sets WebSocket max message size to 1 MiB + 5 bytes.

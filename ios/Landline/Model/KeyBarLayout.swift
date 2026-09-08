@@ -24,6 +24,10 @@ enum KeyBarAction: Hashable {
     case latchCtrl
     case latchAlt
     case latchLeader
+    /// Opens the picker and, once a file has reached the host, types the path
+    /// it landed at. The only key in the bar that is not bytes: a phone has no
+    /// way to hand a file to a terminal, so the bar is where that goes.
+    case attachFile
 
     /// A key whose bytes are fixed. Most of the catalog is this, and writing it
     /// out is what keeps those entries readable as the byte strings they are.
@@ -32,8 +36,10 @@ enum KeyBarAction: Hashable {
     }
 
     var isLatch: Bool {
-        if case .send = self { return false }
-        return true
+        switch self {
+        case .latchCtrl, .latchAlt, .latchLeader: return true
+        case .send, .attachFile: return false
+        }
     }
 }
 
@@ -93,6 +99,16 @@ enum KeyBarCatalog {
         // and windows being switched all day. Buried at the bottom of the
         // catalog these would not be found.
         Group(id: "TMUX", entries: tmuxEntries),
+        // One key, and it is here rather than in the header because it is a
+        // thing the phone keyboard cannot do, which is what this bar is for.
+        // Optional like every other key: a host you never send files to does
+        // not have to carry it.
+        Group(id: "FILES", entries: [
+            // The bar draws this one as a `PageMark` rather than printing the
+            // label, because a word in the row reads as a key that types it.
+            // The label survives for the settings list, which is text.
+            .init(id: "file.attach", label: "FILE", name: "attach a photo or file", action: .attachFile),
+        ]),
         Group(id: "MODIFIERS", entries: [
             .init(id: "ctrl", label: "CTRL", name: "control", action: .latchCtrl),
             .init(id: "alt", label: "ALT", name: "alt", action: .latchAlt),
@@ -257,10 +273,19 @@ struct KeyBarKey: Identifiable, Hashable, Codable {
         sequence = try container.decodeIfPresent(String.self, forKey: .sequence) ?? ""
     }
 
-    /// The default row: exactly the keys the bar has always had, plus the
-    /// leader, so an existing user opens this build and sees no regression.
+    /// The default row: the keys the bar has always had, plus the leader and
+    /// the attachment key, so an existing user opens this build and sees no
+    /// regression.
+    ///
+    /// `file.attach` sits third rather than last, and that is the decision
+    /// rather than an oversight. Thirteen keys already scroll on a phone, so a
+    /// key at the end is a key nobody finds, and this is the one thing in the
+    /// bar that a person has no other route to: every other key has a byte
+    /// somebody could type, and this one is the only way a photo reaches a
+    /// session at all. Anyone who disagrees can move or remove it, which is
+    /// what the row being a setting is for.
     static let defaultLayout: [KeyBarKey] = [
-        "esc", "tab",
+        "esc", "tab", "file.attach",
         "ctrl", "alt", "leader",
         "arrow.left", "arrow.down", "arrow.up", "arrow.right",
         "sym.tilde", "sym.pipe", "sym.slash", "sym.hyphen",
@@ -402,6 +427,7 @@ extension KeyBarKey {
         switch resolved?.action {
         case .send(let template): return KeySequence.hex(template)
         case .latchCtrl, .latchAlt, .latchLeader: return "LATCHES"
+        case .attachFile: return "SENDS A FILE"
         case .none: return "UNRESOLVED"
         }
     }

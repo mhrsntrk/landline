@@ -35,6 +35,23 @@ pub struct Config {
     /// Argon2id PHC hash of the unlock secret. Empty means no unlock is
     /// required.
     pub unlock_hash: String,
+    /// Whether the file inbox (`POST /v1/token`, `PUT /v1/files/{name}`) is
+    /// served. See `docs/FILES.md`.
+    ///
+    /// On by default, unlike every other decision in this file, and the reason
+    /// is that it is not a new grant: the inbox sits behind the same tailnet
+    /// login and the same unlock secret as the shell, and anyone through both
+    /// of those already has a PTY that can write anything anywhere. Turning it
+    /// off is for hosts that want the endpoint gone entirely, not for hosts
+    /// worried about who can reach it.
+    pub uploads_enabled: bool,
+    /// Directory uploads land in. Empty resolves to `~/.landline/inbox`.
+    pub upload_dir: String,
+    /// Largest single upload accepted, in bytes. A phone photo is 3 to 5 MB.
+    pub upload_max_bytes: u64,
+    /// How long an uploaded file is kept before it is deleted. Zero disables
+    /// the sweep and keeps files forever.
+    pub upload_ttl_hours: u64,
 }
 
 impl Default for Config {
@@ -48,6 +65,10 @@ impl Default for Config {
             scrollback_bytes: 262_144,
             max_sessions: 8,
             unlock_hash: String::new(),
+            uploads_enabled: true,
+            upload_dir: String::new(),
+            upload_max_bytes: 26_214_400,
+            upload_ttl_hours: 72,
         }
     }
 }
@@ -104,6 +125,29 @@ impl Config {
         Ok(())
     }
 
+    /// Absolute path of the file inbox: `upload_dir` when set, otherwise
+    /// `~/.landline/inbox`.
+    ///
+    /// A relative `upload_dir` is resolved against the home directory rather
+    /// than against the daemon's working directory, which under launchd or
+    /// systemd is `/` and is not somewhere anyone means.
+    pub fn resolve_upload_dir(&self) -> anyhow::Result<PathBuf> {
+        let home = directories::BaseDirs::new()
+            .context("could not determine the home directory for this platform")?
+            .home_dir()
+            .to_path_buf();
+        let configured = self.upload_dir.trim();
+        if configured.is_empty() {
+            return Ok(home.join(".landline").join("inbox"));
+        }
+        let path = shellexpand_home(configured, &home);
+        Ok(if path.is_absolute() {
+            path
+        } else {
+            home.join(path)
+        })
+    }
+
     /// Resolve the shell to spawn for sessions.
     ///
     /// A non-empty `shell` field always wins. Otherwise, on Unix, `$SHELL`
@@ -136,6 +180,16 @@ impl Config {
     /// [`resolve_command`] for the resolution order and the shell wrapping.
     pub fn resolve_command(&self, cmd: Option<&str>) -> (String, Vec<String>) {
         self::resolve_command(&self.resolve_shell(), &self.default_cmd, cmd)
+    }
+}
+
+/// Expands a leading `~/` against `home`. Only the leading form, because
+/// `~user` needs a passwd lookup and nothing here wants one.
+fn shellexpand_home(path: &str, home: &std::path::Path) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None if path == "~" => home.to_path_buf(),
+        None => PathBuf::from(path),
     }
 }
 
@@ -302,6 +356,10 @@ mod tests {
         assert_eq!(config.scrollback_bytes, 262_144);
         assert_eq!(config.max_sessions, 8);
         assert_eq!(config.unlock_hash, "");
+        assert!(config.uploads_enabled);
+        assert_eq!(config.upload_dir, "");
+        assert_eq!(config.upload_max_bytes, 26_214_400);
+        assert_eq!(config.upload_ttl_hours, 72);
     }
 
     #[test]
@@ -315,6 +373,10 @@ mod tests {
             scrollback_bytes: 1024,
             max_sessions: 16,
             unlock_hash: "$argon2id$v=19$m=19456,t=2,p=1$abcd$efgh".to_string(),
+            uploads_enabled: false,
+            upload_dir: "~/inbox".to_string(),
+            upload_max_bytes: 1024,
+            upload_ttl_hours: 1,
         };
 
         let serialized = toml::to_string(&config).expect("serialize");
@@ -328,6 +390,10 @@ mod tests {
         assert_eq!(parsed.scrollback_bytes, config.scrollback_bytes);
         assert_eq!(parsed.max_sessions, config.max_sessions);
         assert_eq!(parsed.unlock_hash, config.unlock_hash);
+        assert_eq!(parsed.uploads_enabled, config.uploads_enabled);
+        assert_eq!(parsed.upload_dir, config.upload_dir);
+        assert_eq!(parsed.upload_max_bytes, config.upload_max_bytes);
+        assert_eq!(parsed.upload_ttl_hours, config.upload_ttl_hours);
     }
 
     #[test]
@@ -343,6 +409,47 @@ mod tests {
         assert_eq!(config.scrollback_bytes, 262_144);
         assert_eq!(config.max_sessions, 8);
         assert_eq!(config.unlock_hash, "");
+        // A config file written before the inbox existed must still enable it,
+        // because the default is what an upgraded daemon inherits.
+        assert!(config.uploads_enabled);
+    }
+
+    #[test]
+    fn upload_dir_defaults_under_the_home_directory() {
+        let config = Config::default();
+        let dir = config.resolve_upload_dir().expect("resolve");
+        assert!(dir.ends_with(".landline/inbox"), "{}", dir.display());
+        assert!(dir.is_absolute());
+    }
+
+    #[test]
+    fn upload_dir_expands_a_tilde_and_anchors_relative_paths() {
+        let tilde = Config {
+            upload_dir: "~/from-phone".to_string(),
+            ..Config::default()
+        };
+        let relative = Config {
+            upload_dir: "from-phone".to_string(),
+            ..Config::default()
+        };
+        assert_eq!(
+            tilde.resolve_upload_dir().expect("resolve"),
+            relative.resolve_upload_dir().expect("resolve"),
+            "a relative path and a tilde path must land in the same place"
+        );
+        assert!(tilde.resolve_upload_dir().expect("resolve").is_absolute());
+    }
+
+    #[test]
+    fn upload_dir_keeps_an_absolute_path() {
+        let config = Config {
+            upload_dir: "/srv/landline-inbox".to_string(),
+            ..Config::default()
+        };
+        assert_eq!(
+            config.resolve_upload_dir().expect("resolve"),
+            PathBuf::from("/srv/landline-inbox")
+        );
     }
 
     #[test]

@@ -212,20 +212,29 @@ struct Host: Codable, Identifiable, Hashable {
         return components.url ?? URL(string: "wss://invalid.invalid/v1/shell")!
     }
 
-    /// Same origin as `wsURL`, over http(s). Used to probe reachability.
-    var httpURL: URL {
+    /// Same origin as `wsURL`, over http(s), for one API path.
+    ///
+    /// The daemon serves the file inbox (`docs/FILES.md`) beside the shell on
+    /// the same listener and behind the same `tailscale serve` mapping, so
+    /// every endpoint this app talks to is this origin with a different path.
+    func apiURL(path: String) -> URL {
         var components = URLComponents()
         components.scheme = useTLS ? "https" : "http"
         components.host = hostname
         components.port = Int(port)
-        components.path = "/v1/shell"
+        components.path = path
         if let demo = demoEndpoint {
             components.scheme = "http"
             components.host = demo.host
             components.port = demo.port
         }
-        return components.url ?? URL(string: "https://invalid.invalid/v1/shell")!
+        // A malformed hostname can make URL construction fail; fall back to a
+        // guaranteed-parseable placeholder so callers do not have to unwrap.
+        return components.url ?? URL(string: "https://invalid.invalid\(path)")!
     }
+
+    /// Same origin as `wsURL`, over http(s). Used to probe reachability.
+    var httpURL: URL { apiURL(path: "/v1/shell") }
 
     /// What the index prints in the name column.
     var displayName: String { name.isEmpty ? hostname : name }

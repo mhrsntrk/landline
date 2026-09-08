@@ -84,7 +84,7 @@ user can do that; wait for them rather than working around it.
 landlined doctor
 ```
 
-Eight checks. Every one must pass. The last line prints the exact
+Nine checks. Every one must pass. The last line prints the exact
 `wss://<machine>.<tailnet>.ts.net/v1/shell` URL, and the hostname in it is what
 the user types into the app.
 

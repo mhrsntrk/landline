@@ -9,10 +9,11 @@ use std::time::Duration;
 
 use anyhow::Context;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::extract::DefaultBodyLimit;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post, put};
 use axum::Router;
 use bytes::Bytes;
 use landline_proto::frame::{
@@ -23,6 +24,7 @@ use uuid::Uuid;
 
 use crate::auth::{self, UnlockGate, UnlockOutcome};
 use crate::config::Config;
+use crate::files::{self, FilesState};
 use crate::session::{AttachArgs, AttachError, Attachment, SessionManager};
 // The admin socket, and everything only it uses, is Unix-only.
 #[cfg(unix)]
@@ -42,26 +44,76 @@ const REPLAY_CHUNK: usize = 900 * 1024;
 const CLEAR_SCREEN: &[u8] = b"\x1b[2J\x1b[H";
 
 #[derive(Clone)]
-struct AppState {
-    cfg: Arc<Config>,
+pub struct AppState {
+    pub cfg: Arc<Config>,
     manager: SessionManager,
-    gate: UnlockGate,
+    pub gate: UnlockGate,
     host: Arc<str>,
+    /// The file inbox, or `None` when `uploads_enabled` is off or the inbox
+    /// directory could not be prepared. `None` makes both HTTP routes answer
+    /// 404, which is what "this daemon does not do that" should look like.
+    pub files: Option<Arc<FilesState>>,
 }
 
 fn app_state(cfg: Config) -> AppState {
     let manager = SessionManager::new(cfg.max_sessions, cfg.scrollback_bytes);
     let gate = UnlockGate::new(cfg.unlock_hash.clone());
+    let files = resolve_files(&cfg);
     AppState {
         cfg: Arc::new(cfg),
         manager,
         gate,
         host: hostname().into(),
+        files,
     }
 }
 
+/// Prepares the inbox, or logs why there will not be one.
+///
+/// A directory that cannot be created is reported once at startup and then
+/// disables the feature, rather than failing every upload later with an error
+/// nobody sees on the phone.
+fn resolve_files(cfg: &Config) -> Option<Arc<FilesState>> {
+    if !cfg.uploads_enabled {
+        tracing::info!("file inbox disabled by config");
+        return None;
+    }
+    let dir = match cfg.resolve_upload_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            tracing::error!(%err, "file inbox disabled: no usable directory");
+            return None;
+        }
+    };
+    if let Err(err) = files::ensure_dir(&dir) {
+        tracing::error!(%err, dir = %dir.display(), "file inbox disabled: directory unusable");
+        return None;
+    }
+    tracing::info!(dir = %dir.display(), max_bytes = cfg.upload_max_bytes, "file inbox ready");
+    Some(Arc::new(FilesState {
+        dir,
+        max_bytes: cfg.upload_max_bytes,
+        tokens: files::TokenStore::new(),
+    }))
+}
+
 fn router(state: AppState) -> Router {
-    let router = Router::new().route("/v1/shell", get(ws_handler));
+    let router = Router::new()
+        .route("/v1/shell", get(ws_handler))
+        .route(
+            "/v1/token",
+            post(files::token_handler)
+                // The body is one unlock secret. `files::MAX_SECRET_LEN` is the
+                // real check; this stops a large body being buffered first.
+                .layer(DefaultBodyLimit::max(files::MAX_SECRET_LEN * 4)),
+        )
+        .route(
+            "/v1/files/{name}",
+            // The upload is streamed and capped per chunk against the
+            // configured maximum, so axum's own buffer limit must be out of the
+            // way rather than set to some second, different number.
+            put(files::upload_handler).layer(DefaultBodyLimit::disable()),
+        );
     #[cfg(feature = "harness")]
     let router = router.route("/", get(harness_page));
     router.with_state(state)
@@ -80,6 +132,12 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     state.manager.spawn_reaper(Duration::from_secs(
         state.cfg.session_ttl_hours.saturating_mul(3600),
     ));
+    if let Some(inbox) = state.files.as_ref() {
+        files::spawn_reaper(
+            inbox.dir.clone(),
+            Duration::from_secs(state.cfg.upload_ttl_hours.saturating_mul(3600)),
+        );
+    }
 
     #[cfg(unix)]
     {
@@ -553,6 +611,7 @@ mod tests {
     use super::*;
 
     use std::net::SocketAddr;
+    use std::path::Path;
 
     use futures_util::{SinkExt, StreamExt};
     use landline_proto::frame::AttachReq;
@@ -575,6 +634,10 @@ mod tests {
             scrollback_bytes: 16_384,
             max_sessions: 4,
             unlock_hash: String::new(),
+            uploads_enabled: false,
+            upload_dir: String::new(),
+            upload_max_bytes: 26_214_400,
+            upload_ttl_hours: 72,
         }
     }
 
@@ -588,6 +651,315 @@ mod tests {
             axum::serve(listener, app).await.expect("test server");
         });
         addr
+    }
+
+    // ---- the file inbox: a raw HTTP client, so no new dependency is pulled
+    // in for six tests. `Connection: close` is what makes "read to EOF" the
+    // whole response.
+
+    struct HttpResp {
+        status: u16,
+        body: String,
+    }
+
+    async fn http(
+        addr: SocketAddr,
+        method: &str,
+        path: &str,
+        login: Option<&str>,
+        token: Option<&str>,
+        body: &[u8],
+    ) -> HttpResp {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        if let Some(login) = login {
+            request.push_str(&format!("{}: {login}\r\n", auth::LOGIN_HEADER));
+        }
+        if let Some(token) = token {
+            request.push_str(&format!("Authorization: Bearer {token}\r\n"));
+        }
+        request.push_str("\r\n");
+
+        let mut stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect to test server");
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("write request head");
+        stream.write_all(body).await.expect("write request body");
+        stream.flush().await.expect("flush");
+
+        // Read until the response is complete rather than until EOF. A request
+        // the server refuses mid-body (413) is answered and closed while this
+        // side is still writing, and the resulting RST would otherwise destroy
+        // a response that had already arrived.
+        let mut raw = Vec::new();
+        timeout(RECV_TIMEOUT, async {
+            let mut chunk = [0u8; 4096];
+            loop {
+                match stream.read(&mut chunk).await {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        raw.extend_from_slice(&chunk[..read]);
+                        if response_is_complete(&raw) {
+                            break;
+                        }
+                    }
+                    // A reset after a complete response is the refusal path
+                    // above, not a failure.
+                    Err(_) => break,
+                }
+            }
+        })
+        .await
+        .expect("timed out reading the HTTP response");
+        let text = String::from_utf8_lossy(&raw).into_owned();
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| panic!("no status line in {text:?}"));
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body.to_string())
+            .unwrap_or_default();
+        HttpResp { status, body }
+    }
+
+    /// Whether `raw` holds a whole HTTP response: headers, plus as many body
+    /// bytes as `Content-Length` promised. Every response this daemon writes
+    /// carries one.
+    fn response_is_complete(raw: &[u8]) -> bool {
+        let text = String::from_utf8_lossy(raw);
+        let Some((head, body)) = text.split_once("\r\n\r\n") else {
+            return false;
+        };
+        let declared = head
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("content-length: ")
+                    .or_else(|| line.strip_prefix("Content-Length: "))
+            })
+            .and_then(|value| value.trim().parse::<usize>().ok());
+        match declared {
+            Some(length) => body.len() >= length,
+            None => false,
+        }
+    }
+
+    /// A config whose inbox points at a fresh temporary directory.
+    fn inbox_config() -> (Config, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "landline-inbox-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let cfg = Config {
+            uploads_enabled: true,
+            upload_dir: dir.to_string_lossy().into_owned(),
+            ..test_config()
+        };
+        (cfg, dir)
+    }
+
+    async fn mint_token(addr: SocketAddr, secret: &str) -> String {
+        let resp = http(
+            addr,
+            "POST",
+            "/v1/token",
+            Some(LOGIN),
+            None,
+            secret.as_bytes(),
+        )
+        .await;
+        assert_eq!(resp.status, 200, "token mint failed: {}", resp.body);
+        let json: serde_json::Value = serde_json::from_str(&resp.body).expect("token json");
+        json["token"].as_str().expect("token field").to_string()
+    }
+
+    /// The path in an upload response, asserted to be inside `dir`.
+    fn stored_path(body: &str, dir: &Path) -> PathBuf {
+        let json: serde_json::Value = serde_json::from_str(body).expect("upload json");
+        let path = PathBuf::from(json["path"].as_str().expect("path field"));
+        assert_eq!(path.parent(), Some(dir), "upload escaped the inbox");
+        path
+    }
+
+    #[tokio::test]
+    async fn upload_round_trip_lands_in_the_inbox() {
+        let (cfg, dir) = inbox_config();
+        let addr = start(cfg).await;
+        let token = mint_token(addr, "").await;
+
+        let resp = http(
+            addr,
+            "PUT",
+            "/v1/files/IMG_4821.PNG",
+            Some(LOGIN),
+            Some(&token),
+            b"not really a png",
+        )
+        .await;
+        assert_eq!(resp.status, 201, "{}", resp.body);
+
+        let path = stored_path(&resp.body, &dir);
+        assert_eq!(
+            std::fs::read(&path).expect("read stored file"),
+            b"not really a png"
+        );
+        // The suggested name is a suggestion: extension kept, name made unique.
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("img_4821-"), "{name}");
+        assert!(name.ends_with(".png"), "{name}");
+        // Nothing partial is left behind.
+        assert!(!dir.join(format!(".{name}.part")).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn upload_needs_both_the_login_and_a_token() {
+        let (cfg, dir) = inbox_config();
+        let addr = start(cfg).await;
+        let token = mint_token(addr, "").await;
+
+        // No login header at all: 403 before anything else is considered.
+        let resp = http(addr, "PUT", "/v1/files/a.txt", None, Some(&token), b"x").await;
+        assert_eq!(resp.status, 403, "{}", resp.body);
+        // A login that is not allowed in.
+        let resp = http(
+            addr,
+            "PUT",
+            "/v1/files/a.txt",
+            Some("stranger@example.com"),
+            Some(&token),
+            b"x",
+        )
+        .await;
+        assert_eq!(resp.status, 403, "{}", resp.body);
+        // Right login, no token.
+        let resp = http(addr, "PUT", "/v1/files/a.txt", Some(LOGIN), None, b"x").await;
+        assert_eq!(resp.status, 401, "{}", resp.body);
+        // Right login, a token nobody minted.
+        let resp = http(
+            addr,
+            "PUT",
+            "/v1/files/a.txt",
+            Some(LOGIN),
+            Some("0123456789abcdef"),
+            b"x",
+        )
+        .await;
+        assert_eq!(resp.status, 401, "{}", resp.body);
+
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("read inbox").count(),
+            0,
+            "a rejected upload must not write anything"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn the_token_endpoint_requires_the_unlock_secret() {
+        let (mut cfg, dir) = inbox_config();
+        cfg.unlock_hash = auth_test_hash("correct-horse");
+        let addr = start(cfg).await;
+
+        let resp = http(addr, "POST", "/v1/token", Some(LOGIN), None, b"wrong").await;
+        assert_eq!(resp.status, 401, "{}", resp.body);
+        assert!(resp.body.contains("attempts_left"), "{}", resp.body);
+
+        let token = mint_token(addr, "correct-horse").await;
+        let resp = http(
+            addr,
+            "PUT",
+            "/v1/files/ok.txt",
+            Some(LOGIN),
+            Some(&token),
+            b"body",
+        )
+        .await;
+        assert_eq!(resp.status, 201, "{}", resp.body);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_oversized_upload_is_refused_and_leaves_nothing() {
+        let (mut cfg, dir) = inbox_config();
+        cfg.upload_max_bytes = 16;
+        let addr = start(cfg).await;
+        let token = mint_token(addr, "").await;
+
+        let resp = http(
+            addr,
+            "PUT",
+            "/v1/files/big.bin",
+            Some(LOGIN),
+            Some(&token),
+            &vec![b'x'; 1024],
+        )
+        .await;
+        assert_eq!(resp.status, 413, "{}", resp.body);
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("read inbox").count(),
+            0,
+            "a refused upload must not leave a partial file"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_traversing_name_still_lands_in_the_inbox() {
+        let (cfg, dir) = inbox_config();
+        let addr = start(cfg).await;
+        let token = mint_token(addr, "").await;
+
+        let resp = http(
+            addr,
+            "PUT",
+            "/v1/files/..%2f..%2fetc%2fpasswd",
+            Some(LOGIN),
+            Some(&token),
+            b"pwned",
+        )
+        .await;
+        assert_eq!(resp.status, 201, "{}", resp.body);
+        let path = stored_path(&resp.body, &dir);
+        assert!(path.starts_with(&dir), "{}", path.display());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn the_inbox_is_absent_when_uploads_are_disabled() {
+        // `test_config` leaves `uploads_enabled` off, which is what every other
+        // test in this file runs with.
+        let addr = start(test_config()).await;
+        let resp = http(addr, "POST", "/v1/token", Some(LOGIN), None, b"").await;
+        assert_eq!(resp.status, 404, "{}", resp.body);
+        let resp = http(
+            addr,
+            "PUT",
+            "/v1/files/a.txt",
+            Some(LOGIN),
+            Some("whatever"),
+            b"x",
+        )
+        .await;
+        assert_eq!(resp.status, 404, "{}", resp.body);
+    }
+
+    /// argon2id hash of `secret`, for the tests that need a locked host.
+    fn auth_test_hash(secret: &str) -> String {
+        use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
+        let salt = SaltString::generate(&mut OsRng);
+        argon2::Argon2::default()
+            .hash_password(secret.as_bytes(), &salt)
+            .expect("hash")
+            .to_string()
     }
 
     async fn connect(addr: SocketAddr, login: Option<&str>) -> Result<WsClient, Box<WsError>> {

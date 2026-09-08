@@ -40,7 +40,10 @@ pub fn run(cfg: &Config) -> anyhow::Result<()> {
     // 7. Somebody is actually allowed in.
     report("allowed_logins", allowed_logins_check(cfg), &mut ok);
 
-    // 8. The URL to enter in the app.
+    // 8. Where a file sent from the phone will land.
+    report("file inbox", inbox_check(cfg), &mut ok);
+
+    // 9. The URL to enter in the app.
     report("app url", app_url(&status), &mut ok);
 
     if ok {
@@ -215,7 +218,33 @@ fn allowed_logins_check(cfg: &Config) -> Result<String, String> {
     }
 }
 
-/// Check 8: this machine's ts.net name, as the URL to enter in the app.
+/// Check 8: the file inbox is configured and writable.
+///
+/// Disabled is a pass, not a failure: it is a choice the operator made, and the
+/// line says so rather than sending anyone looking for a fault. What fails is
+/// an inbox that is meant to exist and cannot be written to, which is the one
+/// state where the app's upload button breaks with nothing on screen to explain
+/// it.
+fn inbox_check(cfg: &Config) -> Result<String, String> {
+    if !cfg.uploads_enabled {
+        return Ok("disabled".to_string());
+    }
+    let dir = cfg
+        .resolve_upload_dir()
+        .map_err(|err| format!("no usable directory: {err}"))?;
+    crate::files::ensure_dir(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    let probe = dir.join(".landline-doctor-probe");
+    std::fs::write(&probe, b"probe")
+        .map_err(|err| format!("{} not writable: {err}", dir.display()))?;
+    std::fs::remove_file(&probe).ok();
+    Ok(format!(
+        "{} (max {} MiB)",
+        dir.display(),
+        cfg.upload_max_bytes / 1_048_576
+    ))
+}
+
+/// Check 9: this machine's ts.net name, as the URL to enter in the app.
 fn app_url(status: &Result<serde_json::Value, String>) -> Result<String, String> {
     let status = status.as_ref().map_err(Clone::clone)?;
     match status["Self"]["DNSName"].as_str() {

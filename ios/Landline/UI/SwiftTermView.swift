@@ -935,6 +935,15 @@ final class TerminalController {
     var cols: Int { terminalView?.getTerminal().cols ?? 80 }
     var rows: Int { terminalView?.getTerminal().rows ?? 24 }
 
+    /// Whether the far end has turned bracketed paste on (`CSI ? 2004 h`).
+    ///
+    /// Read at the moment something is pasted rather than tracked, because it
+    /// changes with whatever is running: a shell prompt sets it, a full-screen
+    /// program may clear it, and the answer only matters for the one frame that
+    /// carries the paste. False when there is no terminal yet, which sends the
+    /// text plainly and is the safe way to be wrong.
+    var bracketedPaste: Bool { terminalView?.getTerminal().bracketedPasteMode ?? false }
+
     // MARK: Feeding
 
     /// Accepts one STDOUT chunk. Never touches SwiftTerm synchronously: the

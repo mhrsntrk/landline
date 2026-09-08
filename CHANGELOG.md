@@ -20,7 +20,11 @@ Nothing has been released yet. This section covers the initial build.
 - Optional per-host unlock secret, argon2id hashed, with exponential backoff on repeated
   failures.
 - Admin unix socket and `landlined sessions` for listing and killing sessions from the CLI.
-- `landlined doctor`, diagnosing tailscaled, MagicDNS, serve mapping, and listener health.
+- File inbox: `POST /v1/token` and `PUT /v1/files/{name}` on the daemon, and a `FILE` key in the
+  app's key bar that picks a photo or a file, uploads it, and types the path it landed at into the
+  session. Documented in `docs/FILES.md`.
+- `landlined doctor`, diagnosing tailscaled, MagicDNS, serve mapping, listener health, and the
+  file inbox.
 - Service installation for macOS (launchd), Linux (systemd), and Windows (scheduled task at
   logon).
 - `landline-cli`, a terminal test client for connecting to the daemon without the iOS app.

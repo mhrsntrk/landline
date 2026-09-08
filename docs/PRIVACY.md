@@ -17,6 +17,7 @@ Everything stays on your device.
 | Terminal palette, font, size, key bar layout | Same | No |
 | Per-host unlock secret | The iOS Keychain | Only to the daemon that asks for it, over TLS |
 | Session identifiers | Same file, so a session can be resumed | Only to the machine you connect to |
+| Photos or files you attach | Not stored by the app | Only to the machine you chose, when you pick one |
 
 Deleting the app deletes all of it. There is no backup on our side to delete,
 because we never received a copy.
@@ -35,6 +36,16 @@ you connected at all.
 Your use of Tailscale is governed by Tailscale's own privacy policy, and your
 use of the machines you connect to is governed by whatever you have configured
 there. Neither is under the developer's control.
+
+## Photos and files
+
+The app can send a photo or a file to a machine you connect to, so that whatever
+you are running there can open it. Nothing is sent unless you pick it, and it
+goes only to the machine whose session you are looking at, over the same
+connection as everything else. The app keeps no copy.
+
+Choosing a photo uses the system picker, which hands over the one image you
+chose and nothing else. The app is never granted access to your photo library.
 
 ## Face ID
 

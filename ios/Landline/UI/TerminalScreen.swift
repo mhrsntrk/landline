@@ -1,5 +1,7 @@
+import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 // The one screen the product exists for. The terminal fills it; everything else
 // is annotation drawn around the plate (DESIGN.md): a thin measured header, a
@@ -89,6 +91,18 @@ struct TerminalScreen: View {
     /// and hides, which on an iPad is constantly.
     @State private var headerWidth: CGFloat = 0
 
+    // Attachments. A phone cannot hand a file to a terminal, so the app puts
+    // one in the host's inbox over HTTP and then types the path it landed at.
+    // See `docs/FILES.md`; the daemon owns the name and the destination.
+    @State private var uploader = FileUploader()
+    @State private var attachSourceShowing = false
+    @State private var photoPickerShowing = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var fileImporterShowing = false
+    @State private var upload = UploadProgress.none
+    /// One shot, so the debug attachment hook cannot fire again on a reconnect.
+    @State private var demoAttachFired = false
+
     /// Live point size. Held in state rather than read off `host` every time
     /// because the pinch gesture changes it mid-session and writes it back to
     /// the store; `host` is the copy this screen was pushed with and would go
@@ -106,9 +120,11 @@ struct TerminalScreen: View {
                        ctrlLatched: $latches.ctrl,
                        altLatched: $latches.alt,
                        leaderLatched: $latches.leader,
-                       leaderByte: leaderByte) { bytes in
-                    sendUserInput(Data(bytes))
-                }
+                       leaderByte: leaderByte,
+                       send: { bytes in sendUserInput(Data(bytes)) },
+                       // Only a live session has somewhere to put a file and
+                       // something to type the path into.
+                       attach: isLive ? { attachSourceShowing = true } : nil)
             }
         }
         .background(Theme.ground)
@@ -158,6 +174,37 @@ struct TerminalScreen: View {
             }
         }
         .task(id: perfLoggingEnabled) { await perfLoggingLoop() }
+        .confirmationDialog("Attach", isPresented: $attachSourceShowing, titleVisibility: .visible) {
+            Button("Photo library") { photoPickerShowing = true }
+            Button("Files") { fileImporterShowing = true }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The file is copied to this host's inbox and its path is typed into the session.")
+        }
+        // Photos only. A video is minutes of bytes over a phone link and past
+        // the daemon's size cap either way, and anyone who genuinely means to
+        // send one can still reach it through Files and get a real answer about
+        // the size rather than a picker that promised it would work.
+        .photosPicker(isPresented: $photoPickerShowing, selection: $photoItem, matching: .images)
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            // Cleared immediately so picking the same photo twice still fires.
+            photoItem = nil
+            Task { await loadPhoto(item) }
+        }
+        .fileImporter(isPresented: $fileImporterShowing, allowedContentTypes: [.item]) { result in
+            switch result {
+            case .success(let url):
+                loadFile(at: url)
+            case .failure(let error):
+                upload = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private var isLive: Bool {
+        if case .live = state { return true }
+        return false
     }
 
     // MARK: - Header
@@ -371,7 +418,7 @@ struct TerminalScreen: View {
         case .needsUnlock:
             band { unlockContent }
         case .live:
-            EmptyView()
+            uploadBand
         case .closed(let reason):
             band { closedContent(reason: reason) }
         }
@@ -415,6 +462,148 @@ struct TerminalScreen: View {
                     .disabled(typedSecret.isEmpty)
             }
         }
+    }
+
+    // MARK: - Attachments
+
+    /// What the band says while a file is on its way, and after one did not
+    /// make it. Nothing at all on success: the path appearing at the prompt is
+    /// the receipt, and a banner confirming what is already on screen is chrome
+    /// that has not earned itself.
+    enum UploadProgress: Equatable {
+        case none
+        case sending(name: String, bytes: Int)
+        case failed(String)
+    }
+
+    @ViewBuilder
+    private var uploadBand: some View {
+        switch upload {
+        case .none:
+            EmptyView()
+        case .sending(let name, let bytes):
+            band {
+                HStack(spacing: Theme.Metric.grid * 3) {
+                    MicroLabel("SENDING", color: Theme.warn)
+                    Text(name)
+                        .llValue(Theme.inkMuted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    MicroLabel(Self.sizeLabel(bytes))
+                }
+            }
+        case .failed(let reason):
+            band {
+                VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
+                    HStack(spacing: Theme.Metric.grid * 3) {
+                        MicroLabel("UPLOAD FAILED", color: Theme.alert)
+                        Spacer(minLength: 0)
+                        Button("DISMISS") { upload = .none }
+                            .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
+                    }
+                    Text(reason)
+                        .llValue(Theme.alertText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Bytes as the band prints them: whole units, never more than four glyphs
+    /// wide, because this sits in a measured row.
+    static func sizeLabel(_ bytes: Int) -> String {
+        if bytes >= 1_048_576 {
+            return "\(Int((Double(bytes) / 1_048_576).rounded())) MB"
+        }
+        return "\(max(1, Int((Double(bytes) / 1024).rounded()))) KB"
+    }
+
+    private func loadPhoto(_ item: PhotosPickerItem) async {
+        let type = item.supportedContentTypes.first
+        guard let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty else {
+            await MainActor.run { upload = .failed(UploadError.empty.message) }
+            return
+        }
+        // The picker does not hand over a file name, only a content type, so
+        // one is made up here. It barely matters: the daemon appends a unique
+        // suffix and owns the final name either way.
+        let name = "photo.\(type?.preferredFilenameExtension ?? "jpg")"
+        let attachment = AttachmentPrep.prepare(data: data, filename: name, type: type)
+        await MainActor.run { send(attachment) }
+    }
+
+    private func loadFile(at url: URL) {
+        // A file picked out of another app's container is only readable inside
+        // this pair of calls.
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+            upload = .failed("could not read that file")
+            return
+        }
+        let type = UTType(filenameExtension: url.pathExtension)
+        send(AttachmentPrep.prepare(data: data, filename: url.lastPathComponent, type: type))
+    }
+
+    private func send(_ attachment: Attachment) {
+        upload = .sending(name: attachment.filename, bytes: attachment.data.count)
+        let target = liveHost
+        // The same secret the shell handshake uses. A host with no unlock sends
+        // an empty one, which the daemon accepts because its gate is not armed.
+        let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
+        Task {
+            do {
+                let path = try await uploader.upload(
+                    data: attachment.data,
+                    filename: attachment.filename,
+                    to: target,
+                    secret: secret
+                )
+                await MainActor.run {
+                    upload = .none
+                    insert(path: path)
+                }
+            } catch {
+                let message = (error as? UploadError)?.message ?? error.localizedDescription
+                await MainActor.run { upload = .failed(message) }
+            }
+        }
+    }
+
+    /// See `DemoSeed.attachesAFile`. Debug-only, and inert unless the
+    /// environment asks for it.
+    private func demoAttachIfAsked() {
+        #if DEBUG
+        guard DemoSeed.attachesAFile, !demoAttachFired else { return }
+        demoAttachFired = true
+        // A moment after the prompt has drawn, so the still shows the path
+        // arriving at a settled screen rather than racing the shell.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            let size = CGSize(width: 900, height: 600)
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1
+            let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+                UIColor(Theme.accent).setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+            }
+            guard let data = image.pngData() else { return }
+            send(AttachmentPrep.prepare(data: data, filename: "demo-shot.png", type: .png))
+        }
+        #endif
+    }
+
+    /// Types the path the file landed at into the session.
+    ///
+    /// Deliberately not routed through `sendUserInput`: a latched Ctrl would
+    /// fold the first byte of the path, and a path is not a keystroke. Nothing
+    /// is executed here, and nothing is guessed about what is running at the
+    /// far end. The path arrives at the prompt and the person decides.
+    private func insert(path: String) {
+        let bytes = PathInsertion.bytes(for: path, bracketedPaste: controller.bracketedPaste)
+        guard !bytes.isEmpty else { return }
+        connection.send(.stdin(Data(bytes)))
     }
 
     private func closedContent(reason: String) -> some View {
@@ -584,6 +773,7 @@ struct TerminalScreen: View {
             if marksProgress < 1 {
                 withAnimation(Theme.Motion.attach) { marksProgress = 1 }
             }
+            demoAttachIfAsked()
             // Debug screenshot hook, the same idiom as `DemoSeed`: arm the
             // leader a moment *after* the attach settles. Arming in
             // `wireUpAndConnect` is not enough against a live session, for two

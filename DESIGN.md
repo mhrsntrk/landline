@@ -106,6 +106,11 @@ breaks the instrument illusion.
   or primary region. This is the world's signature device; one per screen at most.
 - Registration marks: 6pt corner brackets in `rule` marking the terminal viewport and any focused
   region. Two per region maximum (opposite corners), never four, which reads as a frame.
+- Page mark: a 14pt sheet with its top corner turned, 1pt outline, drawn in the key bar's attach
+  cell. The key bar prints words and every one of them is a key a keyboard has, so the one cell
+  that opens a picker instead is a mark rather than a word. It takes its colour from the cell, so
+  pressed and disabled reach it for free. Drawn, never an SF Symbol, and never a Nerd Font glyph:
+  the bundled face is the terminal's and the chrome sets in SF Mono.
 - No shadows anywhere. Depth comes from the `panel` and `raised` layers.
 - The index column in regular width is 300 to 380pt, measured off the longest thing its row prints
   (a tailnet hostname with its port). A row that will not fit its columns at that width **drops or
