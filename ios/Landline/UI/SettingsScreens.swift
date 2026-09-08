@@ -147,9 +147,11 @@ struct SettingsView: View {
 /// this world's — plain style, hidden separators, our own hairlines, `ground`
 /// row backgrounds — so it reads as the index, not as a settings app.
 ///
-/// Reorder is offered twice on purpose. A drag is fast when both hands are
-/// free; the ▲ ▼ pair is what works one-handed on a train, which is the scene
-/// this app is actually used in (PRODUCT.md).
+/// Reorder is a long-press drag and nothing else. It used to be offered twice,
+/// with a ▲ ▼ pair in every row as well, on the argument that buttons work
+/// one-handed. What that actually bought was three controls per row competing
+/// for a thumb, and the annotation now says the row can be held, which is the
+/// part that was missing.
 struct KeyBarSettingsView: View {
     @Environment(SettingsStore.self) private var settings
 
@@ -157,8 +159,8 @@ struct KeyBarSettingsView: View {
 
     enum Route: Hashable {
         case catalog
-        /// nil adds a new custom key; an id edits that one.
-        case custom(UUID?)
+        /// nil adds a new custom key; an id edits that slot, catalog or custom.
+        case key(UUID?)
     }
 
     var body: some View {
@@ -174,8 +176,12 @@ struct KeyBarSettingsView: View {
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $route) { destination($0) }
         .task {
-            if DemoSeed.opensCustomKey { route = .custom(nil) }
+            if DemoSeed.opensCustomKey { route = .key(nil) }
             if DemoSeed.opensCatalog { route = .catalog }
+            // The attach key, because it is the one that ships wearing an icon.
+            if DemoSeed.opensKeyAppearance {
+                route = settings.keyBar.first { $0.catalogID == "file.attach" }.map { .key($0.id) }
+            }
         }
     }
 
@@ -184,14 +190,14 @@ struct KeyBarSettingsView: View {
         switch route {
         case .catalog:
             KeyBarCatalogView()
-        case .custom(let id):
-            KeyBarCustomKeyView(editing: id)
+        case .key(let id):
+            KeyBarKeyView(editing: id)
         }
     }
 
     private var annotation: String {
         let count = settings.keyBar.count
-        return "\(count) \(count == 1 ? "KEY" : "KEYS") / IN ORDER, LEFT TO RIGHT"
+        return "\(count) \(count == 1 ? "KEY" : "KEYS") / HOLD A ROW TO REORDER"
     }
 
     // MARK: Specimen
@@ -231,10 +237,10 @@ struct KeyBarSettingsView: View {
                     .overlay(alignment: .bottom) { Hairline() }
                     .deleteDisabled(true)
             }
-            // Long-press drag. Not in edit mode: an active `List` draws a grey
-            // system grip on every row, which is precisely the iOS chrome this
-            // world refuses (DESIGN.md), and the ▲ ▼ pair in the row is both
-            // the visible affordance and the one that works one-handed.
+            // Long-press drag, and the only way to reorder. Not in edit mode:
+            // an active `List` draws a grey system grip on every row, which is
+            // precisely the iOS chrome this world refuses (DESIGN.md). What
+            // says a row can be dragged is the annotation under the title.
             .onMove { settings.move(fromOffsets: $0, toOffset: $1) }
         }
         .listStyle(.plain)
@@ -250,24 +256,33 @@ struct KeyBarSettingsView: View {
                 .llValue(Theme.inkMuted)
                 .llMeasuredColumn()
 
-            // The cell as the bar prints it, at the width the bar gives it.
-            Text(key.resolved?.label ?? "?")
-                .font(.llMicroLabel)
-                .tracking(0.8)
-                .foregroundStyle(key.resolved == nil ? Theme.alertText : Theme.inkBright)
-                .lineLimit(1)
-                .frame(width: 40, height: 28)
-                .overlay { Rectangle().strokeBorder(Theme.rule, lineWidth: 0.5) }
+            // The cell as the bar prints it, at the width the bar gives it,
+            // icon and all: this column answers "which key is this" and a word
+            // where the bar draws a glyph does not answer it.
+            Group {
+                if let resolved = key.resolved {
+                    KeyCellLabel(key: resolved)
+                } else {
+                    Text("?")
+                }
+            }
+            .font(.llMicroLabel)
+            .tracking(0.8)
+            .foregroundStyle(key.resolved == nil ? Theme.alertText : Theme.inkBright)
+            .lineLimit(1)
+            .frame(width: 40, height: 28)
+            .overlay { Rectangle().strokeBorder(Theme.rule, lineWidth: 0.5) }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(key.settingsName)
                     .llValue()
                     .lineLimit(1)
                     .truncationMode(.tail)
-                // A custom key is the only row that opens something, so it is
-                // the only row that says so. A key you wrote and cannot find
-                // your way back into is a key you have to delete and retype.
-                MicroLabel(key.isCustom ? "CUSTOM / \(key.settingsDetail) \u{203A}" : key.settingsDetail,
+                // Every row opens an editor now, so every row carries the mark
+                // that says so. What is behind it differs: a custom key can
+                // change what it sends, a catalog key only how it looks.
+                MicroLabel(key.isCustom ? "CUSTOM / \(key.settingsDetail) \u{203A}"
+                                        : "\(key.settingsDetail) \u{203A}",
                            color: key.resolved == nil ? Theme.alertText : Theme.inkMuted)
                     .llMeasuredColumn()
                     .lineLimit(1)
@@ -275,12 +290,6 @@ struct KeyBarSettingsView: View {
 
             Spacer(minLength: Theme.Metric.grid)
 
-            glyph("\u{25B2}", label: "move earlier", enabled: index > 0) {
-                settings.nudge(id: key.id, by: -1)
-            }
-            glyph("\u{25BC}", label: "move later", enabled: index < settings.keyBar.count - 1) {
-                settings.nudge(id: key.id, by: 1)
-            }
             glyph("\u{00D7}", label: "remove", tint: Theme.alertText) {
                 settings.remove(id: key.id)
             }
@@ -290,7 +299,7 @@ struct KeyBarSettingsView: View {
         .frame(minHeight: Theme.Metric.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture { if key.isCustom { route = .custom(key.id) } }
+        .onTapGesture { route = .key(key.id) }
         .accessibilityElement(children: .contain)
     }
 
@@ -331,7 +340,7 @@ struct KeyBarSettingsView: View {
             HStack(spacing: Theme.Metric.grid * 3) {
                 Button("+ ADD KEY") { route = .catalog }
                     .buttonStyle(InstrumentButtonStyle(emphasis: .primary))
-                Button("+ CUSTOM") { route = .custom(nil) }
+                Button("+ CUSTOM") { route = .key(nil) }
                     .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
                 Spacer(minLength: 0)
                 Button("RESET") {
@@ -421,16 +430,23 @@ struct KeyBarCatalogView: View {
     }
 }
 
-// MARK: - Custom key
+// MARK: - One key
 
-/// A key the user writes: a label, and the bytes it sends.
+/// One slot in the row: how it looks, and, when it is a custom key, what it
+/// sends.
 ///
-/// The rule this screen enforces is the whole reason it validates as you type:
-/// a custom key that silently sends the wrong bytes is worse than no custom key
-/// at all. So the resolved bytes are printed in hex under the field, and SAVE is
+/// Both kinds of key land here, which is the point. A catalog key used to be a
+/// row that opened nothing, so `ESC` was `ESC` forever even though the cell is
+/// the thing a thumb aims at and the name is the part the owner might disagree
+/// with. Appearance is editable on every key; the sequence is editable only
+/// where there is one to edit.
+///
+/// The rule this screen enforces for a custom key is why it validates as you
+/// type: one that silently sends the wrong bytes is worse than no custom key at
+/// all. So the resolved bytes are printed in hex under the field, and SAVE is
 /// dead until the sequence parses.
-struct KeyBarCustomKeyView: View {
-    /// nil adds a new key; an id edits the stored one.
+struct KeyBarKeyView: View {
+    /// nil adds a new custom key; an id edits that slot, catalog or custom.
     let editing: UUID?
 
     @Environment(SettingsStore.self) private var settings
@@ -438,30 +454,61 @@ struct KeyBarCustomKeyView: View {
 
     @State private var label = ""
     @State private var sequence = ""
+    /// nil means this screen has not overridden the icon, so the key wears
+    /// whatever the catalog gives it. See `KeyBarKey.icon`.
+    @State private var icon: String?
     @FocusState private var focused: Field?
 
     private enum Field: Hashable { case label, sequence }
 
-    var body: some View {
-        SettingScreen(title: editing == nil ? "CUSTOM KEY" : "EDIT KEY", annotation: annotation) {
-            FieldRow(label: "LABEL", annotation: "PRINTED ON THE CELL") {
-                TextField("", text: $label, prompt: prompt("^W"))
-                    .focused($focused, equals: .label)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-            }
-            Hairline()
-            FieldRow(label: "SENDS", annotation: "SEQUENCE", error: error) {
-                TextField("", text: $sequence, prompt: prompt("\\e[1;5D"))
-                    .focused($focused, equals: .sequence)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(.llValue)
-            }
+    /// The slot being edited, or nil while adding a new custom key.
+    private var stored: KeyBarKey? { editing.flatMap { settings.key(id: $0) } }
 
-            bytesPlate
+    /// Whether this screen may edit what the key sends. A catalog key's bytes
+    /// are the catalog's, and rewriting them here would leave a key called
+    /// `ESC` sending something else.
+    private var editsSequence: Bool { stored?.isCustom ?? true }
+
+    private var title: String {
+        guard let stored else { return "CUSTOM KEY" }
+        return stored.isCustom ? "EDIT KEY" : "KEY"
+    }
+
+    var body: some View {
+        SettingScreen(title: title, annotation: annotation) {
+            specimen
             Hairline()
-            syntax
+            FieldRow(label: "LABEL", annotation: labelAnnotation) {
+                TextField("", text: $label, prompt: prompt(labelPrompt))
+                    .focused($focused, equals: .label)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    // A cell is 44pt and sets at 10pt, so a long label is not
+                    // small print, it is a truncated one. The limit is here
+                    // rather than in the model because this is where someone
+                    // finds out, while they are typing it.
+                    .onChange(of: label) { _, typed in
+                        let capped = String(typed.prefix(Self.labelLimit))
+                        if capped != typed { label = capped }
+                    }
+            }
+            Hairline()
+            iconPicker
+            Hairline()
+
+            if editsSequence {
+                FieldRow(label: "SENDS", annotation: "SEQUENCE", error: error) {
+                    TextField("", text: $sequence, prompt: prompt("\\e[1;5D"))
+                        .focused($focused, equals: .sequence)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.llValue)
+                }
+
+                bytesPlate
+                Hairline()
+                syntax
+            }
 
             HStack(spacing: Theme.Metric.grid * 3) {
                 Button(editing == nil ? "ADD KEY" : "SAVE") { save() }
@@ -482,6 +529,7 @@ struct KeyBarCustomKeyView: View {
             if let editing, let key = settings.key(id: editing) {
                 label = key.label
                 sequence = key.sequence
+                icon = key.icon
             } else if let seed = Self.demoSequenceSeed ?? DemoSeed.customKeySeed {
                 // Debug screenshot hook: a sequence in the field, so the hex
                 // readout, the syntax table and the refusal can be looked at.
@@ -489,6 +537,123 @@ struct KeyBarCustomKeyView: View {
                 sequence = seed.sequence
             }
         }
+    }
+
+    /// Four, not three: `BKSP`, `PGUP`, `CTRL` and `HOME` are what this app
+    /// itself prints on a cell, and a limit that refuses to let anyone write
+    /// what the catalog already ships would be arbitrary.
+    static let labelLimit = 4
+
+    /// The cell as the bar will draw it, at the size the bar draws it.
+    ///
+    /// The same device the font screen and the key bar screen both use: show
+    /// the setting as the thing it produces. An icon picked from a grid and an
+    /// icon on a 44pt cell are not the same sight, and the grid is not the one
+    /// that matters.
+    private var specimen: some View {
+        HStack(spacing: Theme.Metric.grid * 4) {
+            VStack(alignment: .leading, spacing: Theme.Metric.grid) {
+                MicroLabel("AS THE TERMINAL WILL DRAW IT")
+                MicroLabel(preview?.icon == nil ? "PRINTS ITS LABEL" : "WEARS AN ICON",
+                           color: Theme.inkDim)
+            }
+            Spacer(minLength: 0)
+            Group {
+                if let preview {
+                    KeyCellLabel(key: preview)
+                } else {
+                    Text("?")
+                }
+            }
+            .font(.llMicroLabel)
+            .tracking(0.8)
+            .foregroundStyle(preview == nil ? Theme.alertText : Theme.inkBright)
+            .lineLimit(1)
+            .frame(width: Theme.Metric.hitTarget, height: Theme.Metric.hitTarget)
+            .overlay { Rectangle().strokeBorder(Theme.rule, lineWidth: 0.5) }
+        }
+        .padding(.vertical, Theme.Metric.grid * 3)
+    }
+
+    /// What the cell would look like if this screen were saved now.
+    ///
+    /// Built from the live fields rather than from the stored key, because a
+    /// specimen that lags what has been typed is worse than none: it says the
+    /// setting did not take.
+    private var preview: ResolvedKey? {
+        var candidate = stored ?? KeyBarKey(label: label, sequence: sequence)
+        candidate.label = label
+        candidate.icon = icon
+        if candidate.isCustom { candidate.sequence = sequence }
+        return candidate.resolved
+    }
+
+    private var labelAnnotation: String {
+        if preview?.icon != nil { return "HIDDEN WHILE AN ICON IS SET" }
+        return editsSequence ? "PRINTED ON THE CELL" : "OVERRIDES THE DEFAULT"
+    }
+
+    /// The icon the cell would wear right now, default included. What the grid
+    /// marks as chosen, because the question a person is answering is "what
+    /// does this key look like", not "which field did I edit".
+    private var effectiveIcon: String? { preview?.icon }
+
+    private var labelPrompt: String {
+        guard let stored, !stored.isCustom,
+              let entry = stored.catalogID.flatMap(KeyBarCatalog.entry(id:))
+        else { return "^W" }
+        return entry.label
+    }
+
+    /// The icon grid. Tapping the icon that is already set clears it, so there
+    /// is a way back to the word without hunting for a reset button.
+    private var iconPicker: some View {
+        VStack(alignment: .leading, spacing: Theme.Metric.grid * 3) {
+            HStack(spacing: Theme.Metric.grid * 2) {
+                MicroLabel("ICON")
+                Spacer(minLength: 0)
+                MicroLabel(effectiveIcon == nil ? "NONE" : "TAP AGAIN TO CLEAR",
+                           color: Theme.inkDim)
+            }
+            ForEach(KeyBarIcon.groups) { group in
+                VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
+                    MicroLabel(group.id, color: Theme.inkDim)
+                    // Fixed columns rather than adaptive: these are cells on a
+                    // grid, and a grid that reflows by a few points per device
+                    // stops reading as ruled paper.
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 6),
+                        spacing: 0
+                    ) {
+                        ForEach(group.icons) { candidate in
+                            iconCell(candidate)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.vertical, Theme.Metric.grid * 3)
+    }
+
+    private func iconCell(_ candidate: KeyBarIcon) -> some View {
+        let selected = effectiveIcon == candidate.scalar
+        return Button {
+            // Clearing writes an empty string rather than nil, because nil
+            // means "use the default" and the default is what is being cleared.
+            icon = selected ? "" : candidate.scalar
+        } label: {
+            Text(candidate.scalar)
+                .font(Font(TerminalFont.nerd(size: 17, bold: false)))
+                .foregroundStyle(selected ? Theme.ground : Theme.ink)
+                .frame(maxWidth: .infinity)
+                .frame(height: Theme.Metric.hitTarget)
+                .background(selected ? Theme.accent : Color.clear)
+                .overlay { Rectangle().strokeBorder(Theme.rule, lineWidth: 0.5) }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(candidate.name))
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     private func prompt(_ text: String) -> Text {
@@ -529,6 +694,11 @@ struct KeyBarCustomKeyView: View {
     }
 
     private var annotation: String {
+        // A catalog key's bytes are not editable here, so the annotation states
+        // what it does rather than what is in a field this screen does not own.
+        if !editsSequence {
+            return stored.map { $0.settingsDetail } ?? "KEY"
+        }
         guard let template, !template.isEmpty else { return "UNRESOLVED" }
         let count = template.byteCount
         return "\(count) \(count == 1 ? "BYTE" : "BYTES") / \(KeySequence.hex(template))"
@@ -595,8 +765,15 @@ struct KeyBarCustomKeyView: View {
     /// cannot resolve it: the byte arrives with the host. What is refused is the
     /// same as before, a sequence that does not parse or produces nothing.
     private var isSaveable: Bool {
+        // A catalog key is always saveable: everything on its screen is an
+        // override, and clearing every field is a legitimate edit that puts the
+        // key back the way the catalog ships it.
+        guard editsSequence else { return true }
         guard let template, !template.isEmpty else { return false }
-        return !label.trimmingCharacters(in: .whitespaces).isEmpty
+        // A custom key needs something on its cell. An icon counts: a key
+        // wearing one never prints its label, so demanding a label as well
+        // would be demanding text nobody will ever see.
+        return effectiveIcon != nil || !label.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     private func save() {
@@ -604,10 +781,11 @@ struct KeyBarCustomKeyView: View {
         let trimmedLabel = label.trimmingCharacters(in: .whitespaces)
         if let editing, var key = settings.key(id: editing) {
             key.label = trimmedLabel
-            key.sequence = sequence
+            key.icon = icon
+            if key.isCustom { key.sequence = sequence }
             settings.replace(key)
         } else {
-            settings.append(KeyBarKey(label: trimmedLabel, sequence: sequence))
+            settings.append(KeyBarKey(label: trimmedLabel, sequence: sequence, icon: icon))
         }
         dismiss()
     }

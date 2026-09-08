@@ -55,6 +55,10 @@ struct KeyBarCatalogEntry: Identifiable, Hashable {
     /// The name a person would say, for the row in the picker and for VoiceOver.
     let name: String
     let action: KeyBarAction
+    /// The icon this key wears when the user has not chosen one. Empty for
+    /// every key whose own name is the clearest thing it could print, which is
+    /// all of them but the attach key.
+    var defaultIcon: String = ""
     /// Holding this key repeats it, at the rate `KeyRepeatState` sets.
     ///
     /// Off for everything by default, and that is the decision rather than an
@@ -104,10 +108,12 @@ enum KeyBarCatalog {
         // Optional like every other key: a host you never send files to does
         // not have to carry it.
         Group(id: "FILES", entries: [
-            // The bar draws this one as a `PageMark` rather than printing the
-            // label, because a word in the row reads as a key that types it.
-            // The label survives for the settings list, which is text.
-            .init(id: "file.attach", label: "FILE", name: "attach a photo or file", action: .attachFile),
+            // Wears an icon rather than printing its label, because a word in
+            // that row reads as a key that types it. The label survives for the
+            // settings list, which is text, and for anyone who overrides the
+            // icon away.
+            .init(id: "file.attach", label: "FILE", name: "attach a photo or file",
+                  action: .attachFile, defaultIcon: KeyBarIcon.attachDefault),
         ]),
         Group(id: "MODIFIERS", entries: [
             .init(id: "ctrl", label: "CTRL", name: "control", action: .latchCtrl),
@@ -249,18 +255,32 @@ struct KeyBarKey: Identifiable, Hashable, Codable {
     var id: UUID = UUID()
     /// A `KeyBarCatalog` id, or nil for a custom key.
     var catalogID: String?
-    /// Custom keys only: what the cell prints.
+    /// What the cell prints. A custom key's own label, and for a catalog key an
+    /// override of the one the catalog gives it. Empty means "use the
+    /// catalog's", which is why clearing the field restores the default rather
+    /// than blanking the cell.
     var label: String = ""
     /// Custom keys only: the bytes, in `KeySequence` syntax.
     var sequence: String = ""
+    /// What this cell wears instead of a word. Three states, and all three are
+    /// needed: nil is "whatever the catalog says", which for almost every key
+    /// is no icon at all; an empty string is "no icon, print the word", chosen
+    /// deliberately; and a scalar is that `KeyBarIcon`.
+    ///
+    /// Two states would not do. The attach key ships wearing an icon, so
+    /// without a way to say *explicitly none* it would be the one key in the
+    /// bar whose icon could never be taken off.
+    var icon: String?
 
     var isCustom: Bool { catalogID == nil }
 
-    init(id: UUID = UUID(), catalogID: String? = nil, label: String = "", sequence: String = "") {
+    init(id: UUID = UUID(), catalogID: String? = nil, label: String = "",
+         sequence: String = "", icon: String? = nil) {
         self.id = id
         self.catalogID = catalogID
         self.label = label
         self.sequence = sequence
+        self.icon = icon
     }
 
     /// Tolerant on purpose, for the same reason `Host` is: a layout written by a
@@ -271,6 +291,7 @@ struct KeyBarKey: Identifiable, Hashable, Codable {
         catalogID = try container.decodeIfPresent(String.self, forKey: .catalogID)
         label = try container.decodeIfPresent(String.self, forKey: .label) ?? ""
         sequence = try container.decodeIfPresent(String.self, forKey: .sequence) ?? ""
+        icon = try container.decodeIfPresent(String.self, forKey: .icon)
     }
 
     /// The default row: the keys the bar has always had, plus the leader and
@@ -298,6 +319,9 @@ struct KeyBarKey: Identifiable, Hashable, Codable {
 struct ResolvedKey: Identifiable, Hashable {
     let id: UUID
     let label: String
+    /// The Nerd Font scalar this cell wears instead of its label, or nil when
+    /// it prints the word. See `KeyBarIcon`.
+    var icon: String?
     let accessibility: String
     let action: KeyBarAction
     /// Holding the cell repeats the key. See `KeyBarCatalogEntry.repeats` for
@@ -396,7 +420,8 @@ extension KeyBarKey {
     var resolved: ResolvedKey? {
         if let catalogID {
             guard let entry = KeyBarCatalog.entry(id: catalogID) else { return nil }
-            return ResolvedKey(id: id, label: entry.label,
+            return ResolvedKey(id: id, label: displayLabel(default: entry.label),
+                               icon: displayIcon(default: entry.defaultIcon),
                                accessibility: entry.name, action: entry.action,
                                repeats: entry.repeats)
         }
@@ -408,7 +433,26 @@ extension KeyBarKey {
               let template = KeySequence.template(sequence),
               !template.isEmpty else { return nil }
         return ResolvedKey(id: id, label: trimmedLabel,
+                           icon: displayIcon(default: ""),
                            accessibility: "\(trimmedLabel), custom key", action: .send(template))
+    }
+
+    /// The word this cell prints: the override when there is one, else the
+    /// catalog's own. Trimmed, because a label of three spaces is a blank cell
+    /// and nobody meant that.
+    private func displayLabel(default fallback: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? fallback : trimmed
+    }
+
+    /// The icon this cell wears, or nil when it prints its label instead.
+    ///
+    /// An icon this build has never heard of resolves to nil rather than to a
+    /// tofu box, so a layout written by a newer build degrades to a word.
+    private func displayIcon(default fallback: String) -> String? {
+        let chosen = icon ?? fallback
+        guard !chosen.isEmpty, KeyBarIcon.icon(scalar: chosen) != nil else { return nil }
+        return chosen
     }
 
     /// The name the settings list prints for this key.
@@ -416,6 +460,7 @@ extension KeyBarKey {
         if let catalogID {
             return KeyBarCatalog.entry(id: catalogID)?.name ?? "unknown key"
         }
+
         let trimmed = label.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? "unnamed custom key" : trimmed
     }

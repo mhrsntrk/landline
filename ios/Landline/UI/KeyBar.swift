@@ -154,14 +154,12 @@ struct KeyBar: View {
         }
     }
 
-    /// The one key that opens a sheet instead of putting bytes on the wire, and
-    /// so the one cell that draws a mark instead of printing a word. See
-    /// `PageMark`.
+    /// The one key that opens a sheet instead of putting bytes on the wire.
     private func attachKey(_ key: ResolvedKey) -> some View {
         Button {
             attach?()
         } label: {
-            PageMark()
+            KeyCellLabel(key: key)
         }
         .buttonStyle(KeyCellStyle(latched: false))
         .disabled(attach == nil)
@@ -186,7 +184,7 @@ struct KeyBar: View {
             Button {
                 if let bytes, !bytes.isEmpty { send?(bytes) }
             } label: {
-                Text(key.label)
+                KeyCellLabel(key: key)
             }
             .buttonStyle(KeyCellStyle(latched: false))
             .disabled(bytes == nil)
@@ -201,7 +199,7 @@ struct KeyBar: View {
         Button {
             isOn.wrappedValue.toggle()
         } label: {
-            Text(key.label)
+            KeyCellLabel(key: key)
         }
         .buttonStyle(KeyCellStyle(latched: isOn.wrappedValue))
         // The one genuinely disabled state: a host whose stored leader notation
@@ -211,6 +209,35 @@ struct KeyBar: View {
         .accessibilityLabel(Text(key.accessibility))
         .accessibilityValue(Text(isOn.wrappedValue ? "armed" : "off"))
         .accessibilityAddTraits(isOn.wrappedValue ? [.isSelected] : [])
+    }
+}
+
+/// What one cell prints: a word, or an icon.
+///
+/// The two need different faces. Words set in SF Mono like the rest of the
+/// chrome; icons are Nerd Font codepoints that SF Mono does not have, so an
+/// icon cell asks for the bundled face by name and would otherwise draw a tofu
+/// box. Colour, pressed state and disabled state are not set here at all: they
+/// arrive through `foregroundStyle` from `KeyCellStyle`, so an icon cell reacts
+/// to a thumb exactly as a word does.
+struct KeyCellLabel: View {
+    let key: ResolvedKey
+
+    /// Slightly larger than the 10pt micro-caps beside it. These glyphs are
+    /// drawn to sit on a terminal's line, not on an annotation row, so matched
+    /// point sizes leave the icon looking shrunken next to a word.
+    private static let iconSize: CGFloat = 15
+
+    var body: some View {
+        if let icon = key.icon {
+            Text(icon)
+                .font(Font(TerminalFont.nerd(size: Self.iconSize, bold: false)))
+                // The chrome tracks its micro-caps by +0.8, which on a single
+                // glyph is a limp to the right rather than letterspacing.
+                .tracking(0)
+        } else {
+            Text(key.label)
+        }
     }
 }
 
@@ -238,7 +265,7 @@ private struct RepeatingKeyCell: View {
             // keystroke.
             if !driver.didRepeat { send(bytes) }
         } label: {
-            Text(key.label)
+            KeyCellLabel(key: key)
         }
         .buttonStyle(KeyCellStyle(latched: false) { pressed in
             if pressed {
