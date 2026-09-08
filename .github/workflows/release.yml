@@ -182,8 +182,11 @@ jobs:
               -e "s/__SHA_X86__/$(sha x86_64-apple-darwin)/" \
               -e "s/__SHA_LINUX_ARM__/$(sha aarch64-unknown-linux-gnu)/" \
               -e "s/__SHA_LINUX_X86__/$(sha x86_64-unknown-linux-gnu)/" \
+              -e "/^__BOTTLE_BLOCK__$/d" \
               packaging/homebrew/landline.rb > landline.rb
           # A leftover placeholder means a rename went unnoticed upstream.
+          # The bottle block is deliberately not one of them: it is emptied
+          # here and written by `bottle-publish` once the bottles exist.
           ! grep -q "__" landline.rb
 
       - name: Push it to the tap

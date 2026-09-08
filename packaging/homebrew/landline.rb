@@ -1,14 +1,19 @@
 # frozen_string_literal: true
 
 # Template for the mhrsntrk/homebrew-tap formula. This file does not live in
-# the tap itself; the release workflow copies/updates a formula derived from
-# this template by `sed`-replacing the placeholders below:
-#   __VERSION__   e.g. "0.3.0" (no leading "v")
-#   __SHA_ARM__   sha256 of landlined-aarch64-apple-darwin
-#   __SHA_X86__   sha256 of landlined-x86_64-apple-darwin
-#   __SHA_LINUX_ARM__  sha256 of landlined-aarch64-unknown-linux-gnu
-#   __SHA_LINUX_X86__  sha256 of landlined-x86_64-unknown-linux-gnu
-#   __BOTTLE_BLOCK__   the `bottle do ... end` produced by `brew bottle`
+# the tap itself; the release workflow renders a formula from it by replacing
+# the double-underscore placeholders below with the version and the checksums
+# the release actually published: VERSION, SHA ARM, SHA X86, SHA LINUX ARM,
+# SHA LINUX X86, and BOTTLE BLOCK.
+#
+# Those names are written without their underscores on purpose. The render
+# step asserts that no placeholder survives, and a comment that spells one out
+# literally would either be rewritten into nonsense or trip that assertion,
+# depending on which placeholder it names. This comment cost a release once.
+#
+# BOTTLE BLOCK is emptied on the first pass and filled in later by the
+# bottle-publish job, which runs `brew bottle --merge --write` against the
+# formula already in the tap.
 #
 # The bottle block is not decoration. Without a bottle Homebrew treats this as
 # a source build, even though `install` only copies an already-compiled binary,
