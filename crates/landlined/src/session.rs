@@ -285,8 +285,6 @@ impl SessionManager {
     }
 
     /// Snapshot of all live sessions.
-    // Called only from the Unix-only admin socket; unreachable on Windows.
-    #[cfg_attr(not(unix), allow(dead_code))]
     pub fn list(&self) -> Vec<SessionInfo> {
         self.inner
             .sessions

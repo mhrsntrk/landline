@@ -1,4 +1,5 @@
 import PhotosUI
+import QuickLook
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -93,8 +94,8 @@ struct TerminalScreen: View {
 
     // Attachments. A phone cannot hand a file to a terminal, so the app puts
     // one in the host's inbox over HTTP and then types the path it landed at.
-    // See `docs/FILES.md`; the daemon owns the name and the destination.
-    @State private var uploader = FileUploader()
+    // See `docs/HTTP.md`; the daemon owns the name and the destination.
+    @State private var api = HostAPI()
     @State private var attachSourceShowing = false
     @State private var photoPickerShowing = false
     @State private var photoItem: PhotosPickerItem?
@@ -102,6 +103,14 @@ struct TerminalScreen: View {
     @State private var upload = UploadProgress.none
     /// One shot, so the debug attachment hook cannot fire again on a reconnect.
     @State private var demoAttachFired = false
+    @State private var snippetsShowing = false
+    /// Files the host has offered (`landlined send`). Polled once on attach and
+    /// on every foregrounding rather than continuously: an offer is made by a
+    /// person at a keyboard, so the moment worth checking is the moment you
+    /// look at the phone.
+    @State private var offers: [HostOffer] = []
+    @State private var openedOffer: URL?
+    @State private var fetchingOffer = false
 
     /// Live point size. Held in state rather than read off `host` every time
     /// because the pinch gesture changes it mid-session and writes it back to
@@ -124,7 +133,8 @@ struct TerminalScreen: View {
                        send: { bytes in sendUserInput(Data(bytes)) },
                        // Only a live session has somewhere to put a file and
                        // something to type the path into.
-                       attach: isLive ? { attachSourceShowing = true } : nil)
+                       attach: isLive ? { attachSourceShowing = true } : nil,
+                       snippets: isLive ? { snippetsShowing = true } : nil)
             }
         }
         .background(Theme.ground)
@@ -169,37 +179,38 @@ struct TerminalScreen: View {
                 controller.focus()
                 if case .closed = state { reconnect() }
                 if case .idle = state { reconnect() }
+                if isLive { Task { await refreshOffers() } }
             default:
                 break
             }
         }
         .task(id: perfLoggingEnabled) { await perfLoggingLoop() }
-        .confirmationDialog("Attach", isPresented: $attachSourceShowing, titleVisibility: .visible) {
-            Button("Photo library") { photoPickerShowing = true }
-            Button("Files") { fileImporterShowing = true }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The file is copied to this host's inbox and its path is typed into the session.")
-        }
-        // Photos only. A video is minutes of bytes over a phone link and past
-        // the daemon's size cap either way, and anyone who genuinely means to
-        // send one can still reach it through Files and get a real answer about
-        // the size rather than a picker that promised it would work.
-        .photosPicker(isPresented: $photoPickerShowing, selection: $photoItem, matching: .images)
-        .onChange(of: photoItem) { _, item in
-            guard let item else { return }
-            // Cleared immediately so picking the same photo twice still fires.
-            photoItem = nil
-            Task { await loadPhoto(item) }
-        }
-        .fileImporter(isPresented: $fileImporterShowing, allowedContentTypes: [.item]) { result in
-            switch result {
-            case .success(let url):
-                loadFile(at: url)
-            case .failure(let error):
-                upload = .failed(error.localizedDescription)
+        // Polled while the session is live, not only on attach. The moment a
+        // file is offered is the moment someone runs `landlined send` at the
+        // machine, which is routinely while they are already looking at the
+        // phone. Checking only on attach meant the band never appeared in the
+        // one case it exists for. A push would be better and the protocol has
+        // no room for one: version 1 is frozen.
+        .task(id: isLive) { await pollOffers() }
+        .modifier(AttachmentPickers(
+            attachSourceShowing: $attachSourceShowing,
+            photoPickerShowing: $photoPickerShowing,
+            photoItem: $photoItem,
+            fileImporterShowing: $fileImporterShowing,
+            snippetsShowing: $snippetsShowing,
+            openedOffer: $openedOffer,
+            onPhoto: { item in Task { await loadPhoto(item) } },
+            onFile: { result in
+                switch result {
+                case .success(let url): loadFile(at: url)
+                case .failure(let error): upload = .failed(error.localizedDescription)
+                }
+            },
+            onSnippet: { snippet in
+                snippetsShowing = false
+                insert(snippet: snippet)
             }
-        }
+        ))
     }
 
     private var isLive: Bool {
@@ -358,6 +369,7 @@ struct TerminalScreen: View {
         case .attaching: return "ATTACHING"
         case .needsUnlock: return "LOCKED"
         case .live: return "LIVE"
+        case .reconnecting: return "RETRYING"
         case .closed: return closedIsError ? "ERROR" : "CLOSED"
         }
     }
@@ -365,7 +377,7 @@ struct TerminalScreen: View {
     private var statusLevel: StatusSquare.Level {
         switch state {
         case .live: return .connected
-        case .connecting, .attaching, .needsUnlock: return .connecting
+        case .connecting, .attaching, .needsUnlock, .reconnecting: return .connecting
         case .closed: return closedIsError ? .failed : .offline
         case .idle: return .offline
         }
@@ -404,6 +416,24 @@ struct TerminalScreen: View {
     @ViewBuilder
     private var stateBand: some View {
         switch state {
+        case .reconnecting(let attempt, let reason):
+            band {
+                VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
+                    HStack(spacing: Theme.Metric.grid * 3) {
+                        MicroLabel("RECONNECTING", color: Theme.warn)
+                        Spacer(minLength: 0)
+                        MicroLabel("TRY \(attempt)").llMeasuredColumn()
+                    }
+                    // The session is on the daemon, so this is a reattach, not
+                    // a new shell. Saying so is what stops someone force
+                    // quitting the app to "start again" and orphaning it.
+                    Text("\(reason). The session is still on the host and will be resumed.")
+                        .llProse(Theme.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("RETRY NOW") { connection.retryNow() }
+                        .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
+                }
+            }
         case .idle, .connecting, .attaching:
             band {
                 HStack(spacing: Theme.Metric.grid * 3) {
@@ -418,7 +448,10 @@ struct TerminalScreen: View {
         case .needsUnlock:
             band { unlockContent }
         case .live:
-            uploadBand
+            VStack(spacing: 0) {
+                offerBand
+                uploadBand
+            }
         case .closed(let reason):
             band { closedContent(reason: reason) }
         }
@@ -555,7 +588,7 @@ struct TerminalScreen: View {
         let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
         Task {
             do {
-                let path = try await uploader.upload(
+                let path = try await api.upload(
                     data: attachment.data,
                     filename: attachment.filename,
                     to: target,
@@ -592,6 +625,96 @@ struct TerminalScreen: View {
             send(AttachmentPrep.prepare(data: data, filename: "demo-shot.png", type: .png))
         }
         #endif
+    }
+
+    /// What the host has sent this way, when it has sent anything.
+    ///
+    /// A band rather than a badge or a count somewhere: a file offered from the
+    /// host is a thing waiting to be picked up, and it should say so where the
+    /// session is, not in a screen someone has to think to visit.
+    @ViewBuilder
+    private var offerBand: some View {
+        if let offer = offers.first {
+            band {
+                HStack(spacing: Theme.Metric.grid * 3) {
+                    MicroLabel(offers.count > 1 ? "\(offers.count) FILES FROM HOST" : "FILE FROM HOST",
+                               color: Theme.ok)
+                    Text(offer.name)
+                        .llValue(Theme.inkBright)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    MicroLabel(Self.sizeLabel(offer.bytes)).llMeasuredColumn()
+                    Spacer(minLength: 0)
+                    Button(fetchingOffer ? "..." : "OPEN") {
+                        Task { await fetch(offer) }
+                    }
+                    .buttonStyle(InstrumentButtonStyle(emphasis: .primary))
+                    .disabled(fetchingOffer)
+                    Button("DISMISS") { Task { await withdraw(offer) } }
+                        .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
+                }
+            }
+        }
+    }
+
+    /// Asks for the outbox while the session is live, and stops when it is not.
+    ///
+    /// Fifteen seconds because that is well under how long anyone waits after
+    /// typing `landlined send` before looking at the phone, and the request is
+    /// a few dozen bytes of JSON over a link that is already carrying a
+    /// terminal.
+    private func pollOffers() async {
+        guard isLive else { return }
+        await refreshOffers()
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled, isLive else { return }
+            await refreshOffers()
+        }
+    }
+
+    private func refreshOffers() async {
+        let target = liveHost
+        let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
+        // Silent on failure. This is a background courtesy, and a host running
+        // a daemon too old to know the endpoint must not put an error band over
+        // a working session.
+        offers = (try? await api.outbox(on: target, secret: secret)) ?? []
+    }
+
+    private func fetch(_ offer: HostOffer) async {
+        fetchingOffer = true
+        defer { fetchingOffer = false }
+        let target = liveHost
+        let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
+        do {
+            let url = try await api.fetchOffer(offer, on: target, secret: secret)
+            // Withdrawn on success: it has been picked up, and an offer that
+            // stays after you took it is a band that never goes away.
+            try? await api.withdrawOffer(id: offer.id, on: target, secret: secret)
+            offers.removeAll { $0.id == offer.id }
+            openedOffer = url
+        } catch {
+            upload = .failed((error as? UploadError)?.message ?? error.localizedDescription)
+        }
+    }
+
+    private func withdraw(_ offer: HostOffer) async {
+        let target = liveHost
+        let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
+        try? await api.withdrawOffer(id: offer.id, on: target, secret: secret)
+        offers.removeAll { $0.id == offer.id }
+    }
+
+    /// Types a saved snippet into the session.
+    ///
+    /// Same path as an inserted file path and for the same reasons: bracketed
+    /// paste when the far end asked for it, and never through `sendUserInput`,
+    /// where a latched Ctrl would fold the first character of it.
+    private func insert(snippet: Snippet) {
+        let bytes = snippet.bytes(bracketedPaste: controller.bracketedPaste)
+        guard !bytes.isEmpty else { return }
+        connection.send(.stdin(Data(bytes)))
     }
 
     /// Types the path the file landed at into the session.
@@ -803,6 +926,12 @@ struct TerminalScreen: View {
             marksProgress = 0
             if sessionEndedAt == nil { sessionEndedAt = Date() }
 
+        case .reconnecting:
+            // The marks stay drawn. This is one session having a bad minute,
+            // not a session ending, and taking the plate apart and putting it
+            // back for every tunnel would be the most animated thing in the app.
+            break
+
         case .connecting, .attaching:
             break
         }
@@ -925,6 +1054,56 @@ private struct SessionAgeReadout: View {
 }
 
 // MARK: - System appearance
+
+/// Everything this screen can present, lifted off `body`.
+///
+/// Not an organisational preference: with all of it inline the type checker
+/// gives up on `body` outright. Six presentations on one view is past what it
+/// will infer in reasonable time, and the failure is a build error rather than
+/// a slow build.
+private struct AttachmentPickers: ViewModifier {
+    @Binding var attachSourceShowing: Bool
+    @Binding var photoPickerShowing: Bool
+    @Binding var photoItem: PhotosPickerItem?
+    @Binding var fileImporterShowing: Bool
+    @Binding var snippetsShowing: Bool
+    @Binding var openedOffer: URL?
+
+    let onPhoto: (PhotosPickerItem) -> Void
+    let onFile: (Result<URL, Error>) -> Void
+    let onSnippet: (Snippet) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog("Attach", isPresented: $attachSourceShowing,
+                                titleVisibility: .visible) {
+                Button("Photo library") { photoPickerShowing = true }
+                Button("Files") { fileImporterShowing = true }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The file is copied to this host's inbox and its path is typed into the session.")
+            }
+            // Photos only. A video is minutes of bytes over a phone link and
+            // past the daemon's size cap either way, and anyone who genuinely
+            // means to send one can still reach it through Files and get a real
+            // answer about the size rather than a picker that promised it would
+            // work.
+            .photosPicker(isPresented: $photoPickerShowing, selection: $photoItem,
+                          matching: .images)
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                // Cleared immediately so picking the same photo twice still fires.
+                photoItem = nil
+                onPhoto(item)
+            }
+            .fileImporter(isPresented: $fileImporterShowing, allowedContentTypes: [.item],
+                          onCompletion: onFile)
+            .sheet(isPresented: $snippetsShowing) {
+                SnippetPickerView(choose: onSnippet)
+            }
+            .quickLookPreview($openedOffer)
+    }
+}
 
 enum SystemAppearance {
     /// The device's own light/dark setting, read past the window-level dark

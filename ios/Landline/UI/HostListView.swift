@@ -1,5 +1,6 @@
 import SwiftUI
 import LocalAuthentication
+import UIKit
 
 // The index of machines. A dense, measured, labelled drawing, not a stack of
 // cards: rows are full bleed and delimited by hairlines, every machine value is
@@ -27,6 +28,10 @@ struct HostListView: View {
     @State private var editingHost: Host?
     @State private var showingAddSheet = false
     @State private var openedHost: Host?
+    /// The host whose session list is open. A separate route from `openedHost`
+    /// because it is a different screen, and because a split view puts the
+    /// terminal in the detail pane while this stays a push either way.
+    @State private var sessionsHost: Host?
     @State private var authError: String?
     /// Drives the session-age column so the figures stay honest while the
     /// screen is open. Tabular by construction, so nothing shifts when it ticks.
@@ -75,6 +80,17 @@ struct HostListView: View {
         .navigationDestination(item: $openedHost) { host in
             TerminalScreen(host: host)
         }
+        .navigationDestination(item: $sessionsHost) { host in
+            SessionsView(host: host) { sessionID in
+                // Resuming is the ordinary open path with the session already
+                // chosen: the store is what the terminal reads to decide what
+                // to reattach to, so writing it here means no second route and
+                // no way for the two to disagree.
+                store.setLastSessionID(sessionID, forHostID: host.id)
+                sessionsHost = nil
+                DispatchQueue.main.async { open(host) }
+            }
+        }
         .navigationDestination(item: $settingsRoute) { _ in SettingsView() }
         .alert("Face ID could not unlock this host", isPresented: .init(
             get: { authError != nil },
@@ -87,6 +103,7 @@ struct HostListView: View {
         .task {
             DemoSeed.seedIfRequested(into: store)
             if DemoSeed.opensEditor, let first = store.hosts.first { editingHost = first }
+            if DemoSeed.opensSessions, let first = store.hosts.first { sessionsHost = first }
             // The two screenshot hooks that name a *route* are the stack's. In a
             // split view `RootView` drives the same two, because there the
             // destination is the detail pane and the sheet, not a push.
@@ -203,7 +220,7 @@ struct HostListView: View {
                     open(host)
                 } label: {
                     HostRow(host: host,
-                            level: reachability.level(for: host),
+                            diagnosis: reachability.diagnosis(for: host),
                             now: now,
                             dense: isSidebar)
                         .background { extentReporter }
@@ -215,6 +232,7 @@ struct HostListView: View {
                 .overlay(alignment: .bottom) { Hairline() }
                 .contextMenu {
                     Button("Open") { open(host) }
+                    Button("Sessions") { sessionsHost = host }
                     Button("Edit") { editingHost = host }
                     Button("Delete", role: .destructive) { store.delete(host) }
                 }
@@ -228,6 +246,12 @@ struct HostListView: View {
                         editingHost = host
                     } label: {
                         Text("EDIT")
+                    }
+                    .tint(Theme.raised)
+                    Button {
+                        sessionsHost = host
+                    } label: {
+                        Text("SESSIONS")
                     }
                     .tint(Theme.raised)
                 }
@@ -389,8 +413,10 @@ private struct IndexRuling: View {
 
 private struct HostRow: View {
     let host: Host
-    let level: StatusSquare.Level
+    let diagnosis: HostDiagnosis
     let now: Date
+
+    private var level: StatusSquare.Level { diagnosis.level }
     /// The sidebar column, at roughly two thirds of the width the same row gets
     /// on a phone once its gutters are paid. See the `Lines` note below for
     /// what that costs and why.
@@ -405,6 +431,16 @@ private struct HostRow: View {
                 nameLine
                 endpointLine
                 if dense { denseFlags }
+                // Only when there is something to say. A row that is answering
+                // stays two lines; a row that is not tells you which of the
+                // four things went wrong, because "offline" is a fact nobody
+                // can act on.
+                if let advice = diagnosis.advice {
+                    proseText(advice)
+                        .llProse(Theme.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, Theme.Metric.grid)
+                }
             }
         }
         .padding(.horizontal, Theme.Metric.gutter)
@@ -413,7 +449,9 @@ private struct HostRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("\(host.displayName), \(host.hostname), \(level.label)"))
+        .accessibilityLabel(Text(
+            "\(host.displayName), \(host.hostname), \(diagnosis.label ?? level.label)"
+        ))
     }
 
     // MARK: Lines
@@ -544,7 +582,7 @@ private struct EmptyIndexView: View {
 
                 Text(dense
                      ? "Nothing in the index yet. The pane beside this one says what has to be running on the machine first."
-                     : "Landline reaches machines you already own, over your own tailnet. A machine appears here once two things are true on it.")
+                     : "Landline reaches machines you already own, over your own tailnet. A machine appears here once the daemon is running on it and Tailscale is in front.")
                     .llProse()
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -568,16 +606,32 @@ private struct EmptyIndexView: View {
 
     private var fullSetup: some View {
         VStack(alignment: .leading, spacing: Theme.Metric.grid * 4) {
+            // The step that used to be missing. Without it the list started at
+            // "run landlined", which is only actionable if you already have it,
+            // and the answer to "where do I get it" was the README of a repo
+            // nobody is holding while they read this.
             command(
                 step: "01",
-                text: "landlined",
-                note: "The daemon runs on the machine and binds loopback only."
+                text: "brew install mhrsntrk/tap/landline",
+                note: "Or download a binary from the releases page. Linux and Windows too."
             )
             Hairline()
             command(
                 step: "02",
+                text: "landlined install",
+                note: "Runs the daemon at login and binds loopback only."
+            )
+            Hairline()
+            command(
+                step: "03",
                 text: "tailscale serve --bg --https=443 http://127.0.0.1:7777",
                 note: "Tailscale terminates TLS and proves who is calling. No open port, no SSH key."
+            )
+            Hairline()
+            command(
+                step: "04",
+                text: "landlined doctor",
+                note: "Checks every step above and prints the address to type in below."
             )
         }
         .padding(.vertical, Theme.Metric.grid * 4)
@@ -603,11 +657,41 @@ private struct EmptyIndexView: View {
                     .llValue(Theme.inkBright)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: Theme.Metric.grid)
+                // Selecting text on a phone to copy a shell command is a fiddle
+                // with a magnifier, and this command has to be typed on a
+                // different machine anyway. One tap puts it on the pasteboard,
+                // which is what AirDrop, Handoff and Messages all read.
+                CopyButton(text: text)
             }
             proseText(note)
                 .llProse()
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// One tap, and the command is on the pasteboard.
+///
+/// It confirms in place rather than with a toast: the label becomes COPIED for
+/// a moment. A copy that says nothing leaves you tapping it again to be sure.
+private struct CopyButton: View {
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = text
+            copied = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                copied = false
+            }
+        } label: {
+            Text(copied ? "COPIED" : "COPY")
+        }
+        .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
+        .accessibilityLabel(Text("copy \(text)"))
     }
 }
 
@@ -620,7 +704,7 @@ private struct EmptyIndexView: View {
 
 @Observable
 final class HostReachability {
-    private(set) var levels: [UUID: StatusSquare.Level] = [:]
+    private(set) var diagnoses: [UUID: HostDiagnosis] = [:]
 
     private let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -630,45 +714,112 @@ final class HostReachability {
     }()
 
     func level(for host: Host) -> StatusSquare.Level {
-        levels[host.id] ?? .offline
+        diagnosis(for: host).level
+    }
+
+    func diagnosis(for host: Host) -> HostDiagnosis {
+        diagnoses[host.id] ?? .unknown
     }
 
     func probe(_ hosts: [Host]) {
-        if let scripted = DemoSeed.scriptedLevels(for: hosts) {
-            levels = scripted
+        if let scripted = DemoSeed.scriptedDiagnoses(for: hosts) {
+            diagnoses = scripted
             return
         }
         for host in hosts where !host.hostname.isEmpty {
-            levels[host.id] = .connecting
+            diagnoses[host.id] = .checking
             Task { [weak self] in
-                let level = await Self.probeOne(host: host, session: self?.session ?? .shared)
-                await MainActor.run { self?.levels[host.id] = level }
+                let diagnosis = await Self.probeOne(host: host, session: self?.session ?? .shared)
+                await MainActor.run { self?.diagnoses[host.id] = diagnosis }
             }
         }
     }
 
-    private static func probeOne(host: Host, session: URLSession) async -> StatusSquare.Level {
+    private static func probeOne(host: Host, session: URLSession) async -> HostDiagnosis {
         var request = URLRequest(url: host.httpURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 4
         do {
-            _ = try await session.data(for: request)
-            return .connected
+            let (_, response) = try await session.data(for: request)
+            // An HTTP error response is still an answer, and *which* answer is
+            // the difference between "the daemon is not running" and "the
+            // daemon is running and does not know you". Both used to read as a
+            // green square.
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            return status == 403 ? .loginNotAllowed : .reachable
         } catch let error as URLError {
-            // An HTTP error response is still an answer; only transport
-            // failures mean unreachable.
             switch error.code {
-            case .cannotFindHost, .cannotConnectToHost, .timedOut,
-                 .notConnectedToInternet, .networkConnectionLost, .dnsLookupFailed:
-                return .offline
+            case .cannotFindHost, .dnsLookupFailed:
+                return .nameDoesNotResolve
+            case .cannotConnectToHost, .timedOut, .networkConnectionLost:
+                return .noAnswer
+            case .notConnectedToInternet:
+                return .noNetwork
             case .secureConnectionFailed, .serverCertificateUntrusted,
                  .serverCertificateHasBadDate, .serverCertificateNotYetValid:
-                return .failed
+                return .tlsFailed
             default:
-                return .offline
+                return .noAnswer
             }
         } catch {
-            return .offline
+            return .noAnswer
+        }
+    }
+}
+
+/// Why a host is or is not answering, in the words the row prints.
+///
+/// A status square answers "can I reach it" and nothing else, which is the
+/// wrong granularity for the only question anyone actually has, which is "what
+/// do I do about it". Every case here names the next thing to try, because on a
+/// tailnet the failure is almost always one of four specific, fixable things.
+enum HostDiagnosis: Equatable {
+    case unknown
+    case checking
+    case reachable
+    /// HTTP 403: the daemon answered and refused. Reachability is fine.
+    case loginNotAllowed
+    case nameDoesNotResolve
+    case noAnswer
+    case tlsFailed
+    case noNetwork
+
+    var level: StatusSquare.Level {
+        switch self {
+        case .reachable: return .connected
+        case .checking: return .connecting
+        case .loginNotAllowed, .tlsFailed: return .failed
+        case .unknown, .nameDoesNotResolve, .noAnswer, .noNetwork: return .offline
+        }
+    }
+
+    /// The micro-caps word for the row.
+    var label: String? {
+        switch self {
+        case .unknown, .checking, .reachable: return nil
+        case .loginNotAllowed: return "NOT ALLOWED"
+        case .nameDoesNotResolve: return "NO SUCH NAME"
+        case .noAnswer: return "NO ANSWER"
+        case .tlsFailed: return "TLS FAILED"
+        case .noNetwork: return "NO NETWORK"
+        }
+    }
+
+    /// One sentence naming the next thing to try.
+    var advice: String? {
+        switch self {
+        case .unknown, .checking, .reachable:
+            return nil
+        case .loginNotAllowed:
+            return "The daemon answered and refused this login. Add it to `allowed_logins` in the host's config and restart the daemon."
+        case .nameDoesNotResolve:
+            return "That name did not resolve. Check the hostname, and that Tailscale is connected on this phone with MagicDNS on."
+        case .noAnswer:
+            return "Nothing answered on that port. Check `landlined doctor` on the host: the daemon may be down, or `tailscale serve` may not be forwarding to it."
+        case .tlsFailed:
+            return "The TLS handshake failed. `tailscale serve` terminates TLS for the ts.net name, so this usually means serve is not set up on that machine."
+        case .noNetwork:
+            return "This phone has no network."
         }
     }
 }
@@ -747,9 +898,31 @@ enum DemoSeed {
     /// hold the armed key bar over a session that is genuinely attached rather
     /// than over a CLOSED band.
     static var armsLeader: Bool { mode == "leaderarmed" || mode == "liveleader" }
-    static var opensSettings: Bool { mode == "settings" || opensKeyBar }
+    static var opensSettings: Bool { mode == "settings" || opensKeyBar || opensSnippets }
     static var opensKeyBar: Bool {
         mode == "keybar" || opensCustomKey || opensCatalog || opensKeyAppearance
+    }
+
+    /// Debug screenshot hooks for the snippet screens.
+    static var opensSnippets: Bool { mode == "snippets" || opensSnippetEditor }
+    static var opensSnippetEditor: Bool { mode == "snippetedit" }
+
+    /// Debug screenshot hook: push the session list for the first host, which
+    /// needs a real daemon behind it to have anything to show.
+    static var opensSessions: Bool { mode == "sessions" }
+
+    /// Debug screenshot hook: a few snippets to look at, since an empty list
+    /// shows the empty state rather than the rows.
+    static var seededSnippets: [Snippet] {
+        guard mode == "snippets" || mode == "snippetpick" else { return [] }
+        return [
+            Snippet(name: "deploy staging", text: "cd ~/src/landline && make deploy STAGE=staging"),
+            Snippet(name: "tail the daemon", text: "tail -f ~/Library/Logs/landline/landlined.err.log"),
+            Snippet(name: "review this diff",
+                    text: "claude \"review the staged diff for correctness bugs, be terse\""),
+            Snippet(name: "restart", text: "launchctl kickstart -k gui/501/dev.landline.daemon",
+                    runsImmediately: true),
+        ]
     }
     static var opensCatalog: Bool { mode == "catalog" }
     static var opensCustomKey: Bool { mode == "customkey" || mode == "customkeybad" }
@@ -845,13 +1018,15 @@ enum DemoSeed {
 
     /// Fixed status squares so the screenshots show all three states without
     /// pretending a simulator can reach a real tailnet.
-    static func scriptedLevels(for hosts: [Host]) -> [UUID: StatusSquare.Level]? {
+    static func scriptedDiagnoses(for hosts: [Host]) -> [UUID: HostDiagnosis]? {
         #if DEBUG
         // A live run probes for real: the whole point of it is that the status
         // square and the session are telling the truth.
         guard mode != nil, mode != "empty", !seedsLiveHost else { return nil }
-        let script: [StatusSquare.Level] = [.connected, .connected, .offline]
-        var result: [UUID: StatusSquare.Level] = [:]
+        // One of each interesting kind, so a still shows what a failed row
+        // actually says rather than only the happy one.
+        let script: [HostDiagnosis] = [.reachable, .reachable, .noAnswer, .loginNotAllowed]
+        var result: [UUID: HostDiagnosis] = [:]
         for (index, host) in hosts.enumerated() {
             result[host.id] = script[index % script.count]
         }

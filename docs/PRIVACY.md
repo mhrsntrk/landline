@@ -18,6 +18,8 @@ Everything stays on your device.
 | Per-host unlock secret | The iOS Keychain | Only to the daemon that asks for it, over TLS |
 | Session identifiers | Same file, so a session can be resumed | Only to the machine you connect to |
 | Photos or files you attach | Not stored by the app | Only to the machine you chose, when you pick one |
+| Snippets you save | A file in the app's private container | Only to the machine you type them into |
+| Files a machine sends you | A temporary file, cleared by iOS | Never leaves the device |
 
 Deleting the app deletes all of it. There is no backup on our side to delete,
 because we never received a copy.

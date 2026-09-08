@@ -44,18 +44,19 @@ enum UploadError: Error, Equatable {
     }
 }
 
-/// Sends one file to a host's inbox and hands back the absolute path it landed
-/// at, which is the only thing the caller wants: the path is what gets typed
-/// into the session.
+/// The client for everything the daemon serves over HTTP beside the shell:
+/// the file inbox, the session list, and the outbox (`docs/HTTP.md`).
 ///
-/// The two-step exchange (mint a token, then spend it) exists so the unlock
-/// secret is argon2-verified once per session rather than once per upload, and
-/// so the upload request itself never carries the secret. Tokens live in memory
+/// One actor because they share the one thing that is awkward: the token. The
+/// two-step exchange (mint a token, then spend it) exists so the unlock secret
+/// is argon2-verified once per session rather than once per request, and so no
+/// request but the mint itself ever carries the secret. Tokens live in memory
 /// here and nowhere else.
-actor FileUploader {
+actor HostAPI {
     private struct Grant {
         let token: String
         let maxBytes: Int
+        let features: Set<String>
         let expires: Date
     }
 
@@ -89,6 +90,119 @@ actor FileUploader {
         }
     }
 
+    // MARK: Sessions
+
+    /// What is running on `host`, newest first.
+    func sessions(on host: Host, secret: String) async throws -> [HostSession] {
+        try await get([HostSession].self, path: "/v1/sessions", host: host, secret: secret)
+    }
+
+    /// Kills one session. Gone means gone: 404 is treated as success, because
+    /// the caller asked for it to not be running and it is not running.
+    func killSession(id: String, on host: Host, secret: String) async throws {
+        _ = try await send(method: "DELETE", path: "/v1/sessions/\(id)",
+                           host: host, secret: secret, tolerating404: true)
+    }
+
+    // MARK: Outbox
+
+    /// Files the host has offered, newest first.
+    func outbox(on host: Host, secret: String) async throws -> [HostOffer] {
+        try await get([HostOffer].self, path: "/v1/outbox", host: host, secret: secret)
+    }
+
+    /// Downloads one offer to a temporary file and returns where it landed.
+    ///
+    /// To a file rather than to memory, because what is coming back is whatever
+    /// the host felt like sending and the phone has to hand a URL to QuickLook
+    /// anyway.
+    func fetchOffer(_ offer: HostOffer, on host: Host, secret: String) async throws -> URL {
+        let body = try await send(method: "GET", path: "/v1/outbox/\(offer.id)",
+                                  host: host, secret: secret)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("landline-offers", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Named as the host named it, so the share sheet and QuickLook show the
+        // file someone actually sent rather than a hex id.
+        let url = directory.appendingPathComponent(HostAPI.pathSegment(for: offer.name))
+        try body.write(to: url, options: .atomic)
+        return url
+    }
+
+    /// Withdraws an offer. The host's own copy is untouched.
+    func withdrawOffer(id: String, on host: Host, secret: String) async throws {
+        _ = try await send(method: "DELETE", path: "/v1/outbox/\(id)",
+                           host: host, secret: secret, tolerating404: true)
+    }
+
+    // MARK: Plumbing
+
+    private func get<T: Decodable>(
+        _ type: T.Type, path: String, host: Host, secret: String
+    ) async throws -> T {
+        let body = try await send(method: "GET", path: path, host: host, secret: secret)
+        guard let decoded = try? JSONDecoder.snakeCase.decode(T.self, from: body) else {
+            throw UploadError.server(status: 200)
+        }
+        return decoded
+    }
+
+    /// One authenticated request, with the same expired-token retry the upload
+    /// path has: a token the daemon forgot is not something a person can act
+    /// on, so it is replaced rather than reported.
+    private func send(
+        method: String,
+        path: String,
+        host: Host,
+        secret: String,
+        tolerating404: Bool = false
+    ) async throws -> Data {
+        var grant = try await token(for: host, secret: secret, forceRefresh: false)
+        do {
+            return try await request(method: method, path: path, host: host,
+                                     grant: grant, tolerating404: tolerating404)
+        } catch UploadError.server(status: 401) {
+            grant = try await token(for: host, secret: secret, forceRefresh: true)
+            return try await request(method: method, path: path, host: host,
+                                     grant: grant, tolerating404: tolerating404)
+        }
+    }
+
+    private func request(
+        method: String,
+        path: String,
+        host: Host,
+        grant: Grant,
+        tolerating404: Bool
+    ) async throws -> Data {
+        var request = URLRequest(url: host.apiURL(path: path))
+        request.httpMethod = method
+        request.timeoutInterval = 60
+        request.setValue("Bearer \(grant.token)", forHTTPHeaderField: "Authorization")
+
+        let (body, response): (Data, URLResponse)
+        do {
+            (body, response) = try await session.data(for: request)
+        } catch {
+            throw UploadError.transport(Self.reason(for: error))
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw UploadError.transport("unexpected response")
+        }
+        switch http.statusCode {
+        case 200, 201, 204:
+            return body
+        case 403:
+            throw UploadError.unauthorized
+        case 404 where tolerating404:
+            return Data()
+        case 404:
+            throw UploadError.disabled
+        case let status:
+            throw UploadError.server(status: status)
+        }
+    }
+
     /// Forgets this host's token. Called when its stored secret changes, so the
     /// next upload does not spend a grant minted with the old one.
     func forget(host: UUID) {
@@ -116,6 +230,9 @@ actor FileUploader {
                 let token: String
                 let expiresIn: Int
                 let maxBytes: Int
+                /// Absent on a daemon older than the endpoint that reports it,
+                /// which is why the app asks rather than assumes.
+                let features: [String]?
             }
             guard let parsed = try? JSONDecoder.snakeCase.decode(TokenResp.self, from: body) else {
                 throw UploadError.server(status: 200)
@@ -123,6 +240,7 @@ actor FileUploader {
             let grant = Grant(
                 token: parsed.token,
                 maxBytes: parsed.maxBytes,
+                features: Set(parsed.features ?? []),
                 expires: Date().addingTimeInterval(TimeInterval(parsed.expiresIn))
             )
             grants[host.id] = grant
@@ -215,6 +333,28 @@ actor FileUploader {
         let trimmed = String(reduced).trimmingCharacters(in: CharacterSet(charactersIn: ".-_"))
         return trimmed.isEmpty ? "file" : trimmed
     }
+}
+
+/// One session on a host, as `GET /v1/sessions` reports it.
+struct HostSession: Decodable, Identifiable, Hashable {
+    let id: String
+    let shell: String
+    let createdAt: Int
+    let attached: Bool
+    let idleSecs: Int
+
+    /// Just the shell's basename, because a column is narrow.
+    var shellLabel: String { (shell as NSString).lastPathComponent }
+
+    var createdDate: Date { Date(timeIntervalSince1970: TimeInterval(createdAt)) }
+}
+
+/// One file the host has offered, as `GET /v1/outbox` reports it.
+struct HostOffer: Decodable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let bytes: Int
+    let offeredAt: Int
 }
 
 private extension JSONDecoder {

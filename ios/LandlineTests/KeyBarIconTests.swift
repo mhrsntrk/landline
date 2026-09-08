@@ -8,6 +8,13 @@ final class KeyBarIconTests: XCTestCase {
 
     // MARK: The set itself
 
+    func testTheDefaultIconsAreInTheOfferedSet() {
+        // A default nobody could have chosen from the grid is a default nobody
+        // can put back after clearing it.
+        XCTAssertNotNil(KeyBarIcon.icon(scalar: KeyBarIcon.attachDefault))
+        XCTAssertNotNil(KeyBarIcon.icon(scalar: KeyBarIcon.snippetDefault))
+    }
+
     func testThereAreThirtyIconsAndTheyAreUnique() {
         XCTAssertEqual(KeyBarIcon.all.count, 30)
         XCTAssertEqual(Set(KeyBarIcon.all.map(\.scalar)).count, 30, "duplicate icon")
@@ -53,11 +60,26 @@ final class KeyBarIconTests: XCTestCase {
         XCTAssertEqual(resolved?.label, "FILE")
     }
 
-    func testEveryOtherCatalogKeyPrintsItsWord() {
-        for entry in KeyBarCatalog.all where entry.id != "file.attach" {
-            XCTAssertNil(KeyBarKey(catalogID: entry.id).resolved?.icon,
-                         "\(entry.id) should print its label")
+    /// The rule, not the list: a key that opens something wears an icon,
+    /// because it is not a key a keyboard has and no word reads right on a 44pt
+    /// cell. Everything else prints what it types.
+    func testOnlyTheKeysThatOpenSomethingWearIcons() {
+        for entry in KeyBarCatalog.all {
+            let icon = KeyBarKey(catalogID: entry.id).resolved?.icon
+            switch entry.action {
+            case .attachFile, .insertSnippet:
+                XCTAssertNotNil(icon, "\(entry.id) opens something and should wear an icon")
+            case .send, .latchCtrl, .latchAlt, .latchLeader:
+                XCTAssertNil(icon, "\(entry.id) should print its label")
+            }
         }
+    }
+
+    func testTheSnippetKeyWearsAnIconByDefault() {
+        let resolved = KeyBarKey(catalogID: "snippet.insert").resolved
+        XCTAssertEqual(resolved?.icon, KeyBarIcon.snippetDefault)
+        XCTAssertEqual(resolved?.label, "SNIP")
+        XCTAssertEqual(resolved?.action, .insertSnippet)
     }
 
     func testALabelOverrideBeatsTheCatalog() {

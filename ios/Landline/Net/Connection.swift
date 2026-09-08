@@ -84,6 +84,10 @@ final class Connection {
         case attaching
         case needsUnlock(attemptsLeft: Int)
         case live(AttachedResp)
+        /// Waiting out a backoff delay before trying again. Distinct from
+        /// `connecting`, because the header has to say that this is a retry
+        /// rather than a first attempt nobody asked for.
+        case reconnecting(attempt: Int, reason: String)
         case closed(reason: String)
     }
 
@@ -108,12 +112,36 @@ final class Connection {
     /// failure closes instead of looping.
     private var retriedAfterSessionGone = false
     private var pingTimer: Timer?
+    /// When the last PONG came back. A socket that has stopped answering is the
+    /// failure this exists to catch: iOS moves a phone between cellular and
+    /// wifi constantly, and the losing side of that is routinely a TCP
+    /// connection that is open, writable, and connected to nothing. Without
+    /// this the header reads LIVE while the far end has been gone for minutes.
+    private var lastPongAt: Date?
+    /// Consecutive reconnects, for the backoff delay. Reset by a successful
+    /// ATTACHED, so a link that flaps once does not spend the rest of the
+    /// session waiting.
+    private var reconnectAttempts = 0
+    private var reconnectTimer: Timer?
     /// Identifies the live transport. A cancelled URLSessionWebSocketTask still
     /// delivers its failure asynchronously, so without this the old socket's
     /// error tears down the socket that replaced it (seen on the SESSION_GONE
     /// re-attach, where the retry could never succeed on its own).
     private var epoch: UInt64 = 0
     private static let pingInterval: TimeInterval = 25
+    /// Two missed pings. One is a stall; two is a socket that is not there.
+    /// Cheap to be wrong: a false positive costs a reconnect that resumes the
+    /// same session and replays the scrollback.
+    private static let pongTimeout: TimeInterval = pingInterval * 2 + 5
+    /// Reconnects are automatic, so the ceiling matters more than the floor: a
+    /// phone in a tunnel must not spend its battery retrying every second, and
+    /// a phone that just moved rooms must not wait a minute.
+    private static let reconnectBaseDelay: TimeInterval = 1
+    private static let reconnectMaxDelay: TimeInterval = 30
+    /// After this many, stop and let the person decide. An app that retries
+    /// forever against a host that is genuinely off is an app that is warm in
+    /// your pocket.
+    private static let maxReconnectAttempts = 6
 
     init(makeTransport: @escaping () -> WebSocketTransport = { URLSessionWebSocketTransport() }) {
         self.makeTransport = makeTransport
@@ -121,6 +149,7 @@ final class Connection {
 
     deinit {
         pingTimer?.invalidate()
+        reconnectTimer?.invalidate()
         transport?.cancel()
     }
 
@@ -132,6 +161,7 @@ final class Connection {
         self.rows = rows
         self.resumeSessionID = host.lastSessionID
         self.retriedAfterSessionGone = false
+        self.reconnectAttempts = 0
         openTransport()
     }
 
@@ -139,7 +169,10 @@ final class Connection {
         // Guard against frames fired before the handshake or after teardown;
         // a nil transport would silently drop them otherwise.
         switch state {
-        case .idle, .closed:
+        // Nothing to send on. `reconnecting` is deliberately here: there is no
+        // socket during the backoff, and a keystroke queued against the one
+        // that replaces it would arrive at a prompt that has moved on.
+        case .idle, .closed, .reconnecting:
             return
         case .connecting, .attaching, .needsUnlock, .live:
             break
@@ -153,6 +186,8 @@ final class Connection {
 
     func disconnect(sendDetach: Bool) {
         stopPinging()
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
         if sendDetach, case .live = state {
             // Courtesy only: any transport drop is an implicit DETACH (PROTOCOL.md 6).
             transport?.send(ClientFrame.detach.encode()) { _ in }
@@ -224,6 +259,8 @@ final class Connection {
 
         case .attached(let resp):
             resumeSessionID = resp.sessionID
+            reconnectAttempts = 0
+            lastPongAt = Date()
             state = .live(resp)
             startPinging()
 
@@ -235,7 +272,7 @@ final class Connection {
             state = .closed(reason: "process exited (\(code))")
 
         case .pong:
-            break // opaque echo; latency measurement could live here
+            lastPongAt = Date()
 
         case .err(let code, let message):
             if code == ErrCode.sessionGone, resumeSessionID != nil, !retriedAfterSessionGone {
@@ -255,12 +292,22 @@ final class Connection {
         }
     }
 
+    /// A transport failure, which is not the same as an ending.
+    ///
+    /// Anything that dropped while a session was live is worth retrying, because
+    /// the session is still on the daemon and a phone's network drops for
+    /// reasons that pass. A failure before ever attaching is not retried the
+    /// same way: a wrong hostname does not become right.
     private func close(reason: String) {
-        // Treat any failure as closed; ignore late errors after we closed.
+        // Ignore late errors from a socket we already replaced or retired.
         if case .closed = state { return }
         stopPinging()
         transport = nil
-        state = .closed(reason: reason)
+        if resumeSessionID != nil {
+            scheduleReconnect(reason: reason)
+        } else {
+            state = .closed(reason: reason)
+        }
     }
 
     private func reasonText(for error: Error) -> String {
@@ -284,9 +331,24 @@ final class Connection {
 
     private func startPinging() {
         stopPinging()
+        lastPongAt = Date()
         // PROTOCOL.md: PING carries exactly 8 opaque bytes; we send monotonic nanos.
         pingTimer = Timer.scheduledTimer(withTimeInterval: Self.pingInterval, repeats: true) { [weak self] _ in
             guard let self, case .live = self.state else { return }
+
+            // Check before sending, so the timeout is measured against the
+            // ping *before* this one rather than against one still in flight.
+            if let last = self.lastPongAt, Date().timeIntervalSince(last) > Self.pongTimeout {
+                // Not a courtesy DETACH: the point is that this socket is not
+                // carrying anything, so nothing would arrive.
+                self.transport?.onMessage = nil
+                self.transport?.cancel()
+                self.transport = nil
+                self.stopPinging()
+                self.scheduleReconnect(reason: "connection went quiet")
+                return
+            }
+
             let nanos = DispatchTime.now().uptimeNanoseconds
             var payload = Data(capacity: 8)
             payload.appendUInt32BE(UInt32(truncatingIfNeeded: nanos >> 32))
@@ -298,5 +360,41 @@ final class Connection {
     private func stopPinging() {
         pingTimer?.invalidate()
         pingTimer = nil
+    }
+
+    // MARK: Reconnect
+
+    /// Retries after a growing delay, then gives up and says so.
+    ///
+    /// Resuming is the whole reason this is safe to do automatically: the
+    /// session lives on the daemon, so a reconnect reattaches to the same shell
+    /// and replays the scrollback rather than starting something new. Without
+    /// resume this would be a feature that silently opened extra shells.
+    private func scheduleReconnect(reason: String) {
+        guard host != nil else { return }
+        reconnectTimer?.invalidate()
+
+        guard reconnectAttempts < Self.maxReconnectAttempts else {
+            state = .closed(reason: reason)
+            return
+        }
+        let attempt = reconnectAttempts
+        reconnectAttempts += 1
+        let delay = min(Self.reconnectBaseDelay * pow(2, Double(attempt)), Self.reconnectMaxDelay)
+        state = .reconnecting(attempt: reconnectAttempts, reason: reason)
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.openTransport()
+        }
+    }
+
+    /// Retry now, whatever the backoff was going to be. What the RECONNECT
+    /// button and a foregrounding both want: a person who just walked back into
+    /// wifi should not wait out a 30 second timer they cannot see.
+    func retryNow() {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+        reconnectAttempts = 0
+        openTransport()
     }
 }

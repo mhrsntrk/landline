@@ -389,24 +389,20 @@ final class KeyBarLayoutTests: XCTestCase {
         try? FileManager.default.removeItem(at: url)
     }
 
-    func testReorderAndRemove() {
+    /// Reordering is a drag now: the per-row buttons are gone, so `nudge` went
+    /// with them. `testDragMove` covers the move itself; this covers removal.
+    func testRemove() {
         let store = makeStore()
         let original = store.keyBar.map(\.catalogID)
-
         let second = store.keyBar[1].id
-        store.nudge(id: second, by: -1)
-        XCTAssertEqual(store.keyBar[0].catalogID, original[1])
-        XCTAssertEqual(store.keyBar[1].catalogID, original[0])
-
-        // A nudge off either end is a no-op, not a crash.
-        store.nudge(id: store.keyBar[0].id, by: -1)
-        XCTAssertEqual(store.keyBar[0].catalogID, original[1])
-        store.nudge(id: store.keyBar[store.keyBar.count - 1].id, by: 1)
-        XCTAssertEqual(store.keyBar.count, original.count)
 
         store.remove(id: second)
         XCTAssertEqual(store.keyBar.count, original.count - 1)
         XCTAssertFalse(store.keyBar.contains { $0.id == second })
+
+        // Removing something already gone is a no-op, not a crash.
+        store.remove(id: second)
+        XCTAssertEqual(store.keyBar.count, original.count - 1)
     }
 
     func testDragMove() {

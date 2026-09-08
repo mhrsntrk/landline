@@ -38,6 +38,9 @@ struct KeyBar: View {
     /// cannot do its job has to look switched off rather than pressable.
     var attach: (() -> Void)?
 
+    /// Opens the snippet picker. Nil disables that key, for the same reasons.
+    var snippets: (() -> Void)?
+
     @Environment(\.displayScale) private var displayScale
 
     /// Keys look small; the touch target never is. 44pt is the floor in both
@@ -150,19 +153,26 @@ struct KeyBar: View {
         case .latchLeader:
             latch(key, isOn: $leaderLatched, enabled: leaderByte != nil)
         case .attachFile:
-            attachKey(key)
+            sheetKey(key, open: attach)
+        case .insertSnippet:
+            sheetKey(key, open: snippets)
         }
     }
 
-    /// The one key that opens a sheet instead of putting bytes on the wire.
-    private func attachKey(_ key: ResolvedKey) -> some View {
+    /// A key that opens something instead of putting bytes on the wire.
+    ///
+    /// Both of them work this way because in both cases the bytes are not known
+    /// until a person has chosen: which photo, which snippet. A nil opener is a
+    /// key that cannot do its job, and it looks switched off rather than
+    /// pressable.
+    private func sheetKey(_ key: ResolvedKey, open: (() -> Void)?) -> some View {
         Button {
-            attach?()
+            open?()
         } label: {
             KeyCellLabel(key: key)
         }
         .buttonStyle(KeyCellStyle(latched: false))
-        .disabled(attach == nil)
+        .disabled(open == nil)
         .accessibilityLabel(Text(key.accessibility))
     }
 

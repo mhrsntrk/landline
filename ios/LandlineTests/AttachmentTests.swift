@@ -66,19 +66,19 @@ final class AttachmentTests: XCTestCase {
 
     func testPathSegmentIsAlwaysOneSegment() {
         for raw in ["../../etc/passwd", "/etc/shadow", "a/b/c.txt", "", "..."] {
-            let segment = FileUploader.pathSegment(for: raw)
+            let segment = HostAPI.pathSegment(for: raw)
             XCTAssertFalse(segment.contains("/"), "\(raw) produced \(segment)")
             XCTAssertFalse(segment.isEmpty, "\(raw) produced an empty segment")
         }
-        XCTAssertEqual(FileUploader.pathSegment(for: "IMG_4821.HEIC"), "IMG_4821.HEIC")
-        XCTAssertEqual(FileUploader.pathSegment(for: "a/b/c.txt"), "c.txt")
-        XCTAssertEqual(FileUploader.pathSegment(for: "..."), "file")
+        XCTAssertEqual(HostAPI.pathSegment(for: "IMG_4821.HEIC"), "IMG_4821.HEIC")
+        XCTAssertEqual(HostAPI.pathSegment(for: "a/b/c.txt"), "c.txt")
+        XCTAssertEqual(HostAPI.pathSegment(for: "..."), "file")
         // Spaces and anything else non-ASCII become a hyphen, so the request
         // line is well formed without percent-encoding games.
-        XCTAssertEqual(FileUploader.pathSegment(for: "my notes.txt"), "my-notes.txt")
+        XCTAssertEqual(HostAPI.pathSegment(for: "my notes.txt"), "my-notes.txt")
         // Leading and trailing punctuation is trimmed, so nothing arrives named
         // like a hidden file.
-        XCTAssertEqual(FileUploader.pathSegment(for: "ünïcode.png"), "n-code.png")
+        XCTAssertEqual(HostAPI.pathSegment(for: "ünïcode.png"), "n-code.png")
     }
 
     // MARK: Typing the path

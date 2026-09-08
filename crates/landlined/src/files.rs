@@ -7,7 +7,7 @@
 //! and gets back the absolute path of a new file inside one configured
 //! directory. That is the whole surface.
 //!
-//! Normative reference for the HTTP behaviour: `docs/FILES.md`.
+//! Normative reference for the HTTP behaviour: `docs/HTTP.md`.
 //!
 //! ## Why this is not a privilege escalation
 //!
@@ -22,10 +22,8 @@
 //! What the endpoints must therefore *not* do is widen that surface: no reads,
 //! no path the caller controls, no overwrite of an existing file.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use axum::body::Body;
 use axum::extract::{Path as UrlPath, State};
@@ -33,97 +31,13 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::StreamExt;
-use rand::RngCore;
 use tokio::io::AsyncWriteExt;
 
-use crate::auth::{self, UnlockOutcome};
-
-/// How long an issued upload token stays valid.
-///
-/// Short because it only has to outlive a picker and an upload, and a token is
-/// held in the app's memory rather than in its Keychain: a foregrounded app
-/// that needs another one can always ask, since it holds the secret that mints
-/// them.
-pub const TOKEN_TTL: Duration = Duration::from_secs(600);
-
-/// Live tokens kept at once. One phone needs one; the cap exists so a caller
-/// that mints in a loop cannot grow the map without bound.
-const MAX_LIVE_TOKENS: usize = 32;
+use crate::api::{err, require_token};
+use crate::auth::random_hex;
 
 /// Longest accepted upload file name, after sanitizing.
 const MAX_NAME_LEN: usize = 48;
-
-/// Longest accepted unlock secret on the token endpoint. Argon2 has no length
-/// limit worth relying on and the body is buffered, so the ceiling is here.
-pub const MAX_SECRET_LEN: usize = 1024;
-
-// ---- tokens ----
-
-struct Grant {
-    login: String,
-    expires: Instant,
-}
-
-/// Bearer tokens minted by `/v1/token` and spent on `/v1/files`.
-///
-/// In memory only: a daemon restart invalidates every token, which is correct.
-/// There is nothing to persist and nothing on disk to leak.
-#[derive(Clone, Default)]
-pub struct TokenStore {
-    grants: Arc<Mutex<HashMap<String, Grant>>>,
-}
-
-impl TokenStore {
-    pub fn new() -> Self {
-        TokenStore::default()
-    }
-
-    /// Mints a token bound to `login`, valid for [`TOKEN_TTL`].
-    pub fn issue(&self, login: &str) -> String {
-        let token = random_hex(32);
-        let mut grants = self.grants.lock().unwrap();
-        let now = Instant::now();
-        grants.retain(|_, grant| grant.expires > now);
-        // Still full after pruning: drop whichever grant dies soonest, so a
-        // token that was just minted is never the one evicted.
-        while grants.len() >= MAX_LIVE_TOKENS {
-            let Some(oldest) = grants
-                .iter()
-                .min_by_key(|(_, grant)| grant.expires)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            grants.remove(&oldest);
-        }
-        grants.insert(
-            token.clone(),
-            Grant {
-                login: login.to_string(),
-                expires: now + TOKEN_TTL,
-            },
-        );
-        token
-    }
-
-    /// True when `token` is live and was minted for `login`.
-    ///
-    /// The lookup is not constant time and does not need to be: a token is 256
-    /// bits from the OS CSPRNG, so there is no guess close enough for a timing
-    /// difference to steer.
-    pub fn check(&self, token: &str, login: &str) -> bool {
-        let mut grants = self.grants.lock().unwrap();
-        let now = Instant::now();
-        grants.retain(|_, grant| grant.expires > now);
-        grants.get(token).is_some_and(|grant| grant.login == login)
-    }
-}
-
-fn random_hex(bytes: usize) -> String {
-    let mut buf = vec![0u8; bytes];
-    rand::rngs::OsRng.fill_bytes(&mut buf);
-    buf.iter().map(|byte| format!("{byte:02x}")).collect()
-}
 
 // ---- file names ----
 
@@ -246,84 +160,12 @@ pub fn spawn_reaper(dir: PathBuf, ttl: Duration) {
 pub struct FilesState {
     pub dir: PathBuf,
     pub max_bytes: u64,
-    pub tokens: TokenStore,
-}
-
-#[derive(serde::Serialize)]
-struct TokenResp {
-    token: String,
-    expires_in: u64,
-    max_bytes: u64,
 }
 
 #[derive(serde::Serialize)]
 struct UploadResp {
     path: String,
     bytes: u64,
-}
-
-#[derive(serde::Serialize)]
-struct ErrResp {
-    error: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attempts_left: Option<u32>,
-}
-
-fn err(status: StatusCode, error: &'static str) -> Response {
-    (
-        status,
-        Json(ErrResp {
-            error,
-            attempts_left: None,
-        }),
-    )
-        .into_response()
-}
-
-/// `POST /v1/token`: exchanges the unlock secret for a short-lived bearer
-/// token. The request body is the secret, verbatim; empty when the host has no
-/// unlock configured.
-///
-/// Wrong secrets go through the same [`crate::auth::UnlockGate`] the shell
-/// handshake uses, so they serve the same backoff and spend the same failure
-/// budget. Guessing here locks out the shell too, which is the intended
-/// behaviour: there is one secret and it has one budget.
-pub async fn token_handler(
-    State(state): State<crate::server::AppState>,
-    headers: HeaderMap,
-    body: String,
-) -> Response {
-    let Some(login) = auth::authenticate(&state.cfg, &headers) else {
-        return err(StatusCode::FORBIDDEN, "unauthorized");
-    };
-    let Some(files) = state.files.as_ref() else {
-        return err(StatusCode::NOT_FOUND, "uploads_disabled");
-    };
-    if body.len() > MAX_SECRET_LEN {
-        return err(StatusCode::BAD_REQUEST, "secret_too_long");
-    }
-
-    match state.gate.verify(body).await {
-        UnlockOutcome::Unlocked => {
-            let token = files.tokens.issue(&login);
-            tracing::info!(%login, "issued upload token");
-            Json(TokenResp {
-                token,
-                expires_in: TOKEN_TTL.as_secs(),
-                max_bytes: files.max_bytes,
-            })
-            .into_response()
-        }
-        UnlockOutcome::Wrong { attempts_left } => (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrResp {
-                error: "bad_secret",
-                attempts_left: Some(attempts_left),
-            }),
-        )
-            .into_response(),
-        UnlockOutcome::LockedOut => err(StatusCode::TOO_MANY_REQUESTS, "locked_out"),
-    }
 }
 
 /// `PUT /v1/files/{name}`: writes the request body into the inbox and answers
@@ -339,18 +181,13 @@ pub async fn upload_handler(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    let Some(login) = auth::authenticate(&state.cfg, &headers) else {
-        return err(StatusCode::FORBIDDEN, "unauthorized");
+    let login = match require_token(&state, &headers) {
+        Ok(login) => login,
+        Err(refusal) => return *refusal,
     };
     let Some(files) = state.files.clone() else {
         return err(StatusCode::NOT_FOUND, "uploads_disabled");
     };
-    let Some(token) = bearer(&headers) else {
-        return err(StatusCode::UNAUTHORIZED, "missing_token");
-    };
-    if !files.tokens.check(token, &login) {
-        return err(StatusCode::UNAUTHORIZED, "bad_token");
-    }
 
     // Declared length first, so an oversized upload is refused before a byte of
     // it is read. The streaming cap below is what actually enforces the limit,
@@ -446,15 +283,6 @@ async fn stream_to_file(body: Body, path: &Path, max_bytes: u64) -> Result<u64, 
     Ok(written)
 }
 
-fn bearer(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::AUTHORIZATION)?
-        .to_str()
-        .ok()?
-        .strip_prefix("Bearer ")
-        .filter(|token| !token.is_empty())
-}
-
 fn content_length(headers: &HeaderMap) -> Option<u64> {
     headers
         .get(axum::http::header::CONTENT_LENGTH)?
@@ -537,30 +365,6 @@ mod tests {
         // is created without one.
         let name = sanitize_name("report.verylongextension").expect("name");
         assert!(name.starts_with("report.verylongextension-"), "{name}");
-    }
-
-    #[test]
-    fn tokens_are_bound_to_the_login_that_minted_them() {
-        let store = TokenStore::new();
-        let token = store.issue("alice@example.com");
-        assert!(store.check(&token, "alice@example.com"));
-        assert!(!store.check(&token, "bob@example.com"));
-        assert!(!store.check("not-a-token", "alice@example.com"));
-    }
-
-    #[test]
-    fn the_token_map_stays_bounded() {
-        let store = TokenStore::new();
-        let first = store.issue("alice@example.com");
-        for _ in 0..MAX_LIVE_TOKENS * 2 {
-            let token = store.issue("alice@example.com");
-            assert!(store.check(&token, "alice@example.com"));
-        }
-        assert!(
-            store.grants.lock().unwrap().len() <= MAX_LIVE_TOKENS,
-            "the map must not grow without bound"
-        );
-        assert!(!store.check(&first, "alice@example.com"));
     }
 
     #[test]

@@ -28,6 +28,10 @@ enum KeyBarAction: Hashable {
     /// it landed at. The only key in the bar that is not bytes: a phone has no
     /// way to hand a file to a terminal, so the bar is where that goes.
     case attachFile
+    /// Opens the snippet picker and types whatever is chosen. Like
+    /// `attachFile`, a key that opens something rather than sending bytes,
+    /// because the bytes are not known until a person picks them.
+    case insertSnippet
 
     /// A key whose bytes are fixed. Most of the catalog is this, and writing it
     /// out is what keeps those entries readable as the byte strings they are.
@@ -38,7 +42,7 @@ enum KeyBarAction: Hashable {
     var isLatch: Bool {
         switch self {
         case .latchCtrl, .latchAlt, .latchLeader: return true
-        case .send, .attachFile: return false
+        case .send, .attachFile, .insertSnippet: return false
         }
     }
 }
@@ -114,6 +118,8 @@ enum KeyBarCatalog {
             // icon away.
             .init(id: "file.attach", label: "FILE", name: "attach a photo or file",
                   action: .attachFile, defaultIcon: KeyBarIcon.attachDefault),
+            .init(id: "snippet.insert", label: "SNIP", name: "insert a saved snippet",
+                  action: .insertSnippet, defaultIcon: KeyBarIcon.snippetDefault),
         ]),
         Group(id: "MODIFIERS", entries: [
             .init(id: "ctrl", label: "CTRL", name: "control", action: .latchCtrl),
@@ -473,6 +479,7 @@ extension KeyBarKey {
         case .send(let template): return KeySequence.hex(template)
         case .latchCtrl, .latchAlt, .latchLeader: return "LATCHES"
         case .attachFile: return "SENDS A FILE"
+        case .insertSnippet: return "TYPES A SNIPPET"
         case .none: return "UNRESOLVED"
         }
     }
@@ -484,9 +491,14 @@ extension KeyBarKey {
 /// shape exists so the second one does not need a migration.
 struct AppSettings: Codable, Equatable {
     var keyBar: [KeyBarKey] = KeyBarKey.defaultLayout
+    /// Saved text, tap to type. See `Snippet`. Empty by default: unlike the key
+    /// bar there is no sensible starting set, because what anyone wants to type
+    /// is theirs.
+    var snippets: [Snippet] = []
 
-    init(keyBar: [KeyBarKey] = KeyBarKey.defaultLayout) {
+    init(keyBar: [KeyBarKey] = KeyBarKey.defaultLayout, snippets: [Snippet] = []) {
         self.keyBar = keyBar
+        self.snippets = snippets
     }
 
     /// A missing `keyBar` means "this file predates the setting", which is the
@@ -496,6 +508,9 @@ struct AppSettings: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         keyBar = try container.decodeIfPresent([KeyBarKey].self, forKey: .keyBar)
             ?? KeyBarKey.defaultLayout
+        // No such distinction here: absent and empty both mean no snippets,
+        // because there is no default list to have been removed.
+        snippets = try container.decodeIfPresent([Snippet].self, forKey: .snippets) ?? []
     }
 
     static func decode(from data: Data) throws -> AppSettings {

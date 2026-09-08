@@ -27,7 +27,7 @@ struct SettingsView: View {
 
     @State private var route: Route?
 
-    enum Route: String, Hashable { case keyBar }
+    enum Route: String, Hashable { case keyBar, snippets }
 
     var body: some View {
         SettingScreen(title: "SETTINGS", annotation: "APP-WIDE / EVERY HOST", leading: leading) {
@@ -61,10 +61,22 @@ struct SettingsView: View {
             .padding(.bottom, Theme.Metric.grid * 6)
 
             Hairline()
+            SummaryRow(label: "SNIPPETS", value: snippetCount, detail: nil) {
+                route = .snippets
+            }
+            Hairline()
             scrollSpeed
         }
-        .navigationDestination(item: $route) { _ in KeyBarSettingsView() }
-        .task { if DemoSeed.opensKeyBar { route = .keyBar } }
+        .navigationDestination(item: $route) { destination in
+            switch destination {
+            case .keyBar: KeyBarSettingsView()
+            case .snippets: SnippetSettingsView()
+            }
+        }
+        .task {
+            if DemoSeed.opensKeyBar { route = .keyBar }
+            if DemoSeed.opensSnippets { route = .snippets }
+        }
     }
 
     private var keyCount: String {
@@ -74,6 +86,12 @@ struct SettingsView: View {
 
     private var layoutNote: String? {
         settings.isDefaultKeyBar ? "DEFAULT" : "CUSTOM"
+    }
+
+    private var snippetCount: String {
+        let count = settings.snippets.count
+        guard count > 0 else { return "NONE" }
+        return "\(count) SAVED"
     }
 
     // MARK: Scroll speed
@@ -426,6 +444,7 @@ struct KeyBarCatalogView: View {
         case .send(let template): return KeySequence.hex(template)
         case .latchCtrl, .latchAlt, .latchLeader: return "LATCHES"
         case .attachFile: return "SENDS A FILE"
+        case .insertSnippet: return "TYPES A SNIPPET"
         }
     }
 }

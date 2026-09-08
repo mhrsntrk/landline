@@ -13,7 +13,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use bytes::Bytes;
 use landline_proto::frame::{
@@ -22,7 +22,8 @@ use landline_proto::frame::{
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::auth::{self, UnlockGate, UnlockOutcome};
+use crate::api::{self, Outbox};
+use crate::auth::{self, TokenStore, UnlockGate, UnlockOutcome};
 use crate::config::Config;
 use crate::files::{self, FilesState};
 use crate::session::{AttachArgs, AttachError, Attachment, SessionManager};
@@ -46,13 +47,20 @@ const CLEAR_SCREEN: &[u8] = b"\x1b[2J\x1b[H";
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<Config>,
-    manager: SessionManager,
+    pub manager: SessionManager,
     pub gate: UnlockGate,
     host: Arc<str>,
+    /// Bearer tokens for the HTTP endpoints. One store for all of them: a
+    /// token says the caller knew the unlock secret, which is the same claim
+    /// whichever endpoint it is spent on.
+    pub tokens: TokenStore,
     /// The file inbox, or `None` when `uploads_enabled` is off or the inbox
-    /// directory could not be prepared. `None` makes both HTTP routes answer
+    /// directory could not be prepared. `None` makes the upload route answer
     /// 404, which is what "this daemon does not do that" should look like.
     pub files: Option<Arc<FilesState>>,
+    /// Files a local process has offered to the phone. Always present: there
+    /// is nothing to configure, and an empty outbox is the normal state.
+    pub outbox: Outbox,
 }
 
 fn app_state(cfg: Config) -> AppState {
@@ -64,7 +72,9 @@ fn app_state(cfg: Config) -> AppState {
         manager,
         gate,
         host: hostname().into(),
+        tokens: TokenStore::new(),
         files,
+        outbox: Outbox::new(),
     }
 }
 
@@ -93,7 +103,6 @@ fn resolve_files(cfg: &Config) -> Option<Arc<FilesState>> {
     Some(Arc::new(FilesState {
         dir,
         max_bytes: cfg.upload_max_bytes,
-        tokens: files::TokenStore::new(),
     }))
 }
 
@@ -102,10 +111,10 @@ fn router(state: AppState) -> Router {
         .route("/v1/shell", get(ws_handler))
         .route(
             "/v1/token",
-            post(files::token_handler)
-                // The body is one unlock secret. `files::MAX_SECRET_LEN` is the
+            post(api::token_handler)
+                // The body is one unlock secret. `api::MAX_SECRET_LEN` is the
                 // real check; this stops a large body being buffered first.
-                .layer(DefaultBodyLimit::max(files::MAX_SECRET_LEN * 4)),
+                .layer(DefaultBodyLimit::max(api::MAX_SECRET_LEN * 4)),
         )
         .route(
             "/v1/files/{name}",
@@ -113,6 +122,13 @@ fn router(state: AppState) -> Router {
             // configured maximum, so axum's own buffer limit must be out of the
             // way rather than set to some second, different number.
             put(files::upload_handler).layer(DefaultBodyLimit::disable()),
+        )
+        .route("/v1/sessions", get(api::sessions_handler))
+        .route("/v1/sessions/{id}", delete(api::session_kill_handler))
+        .route("/v1/outbox", get(api::outbox_handler))
+        .route(
+            "/v1/outbox/{id}",
+            get(api::outbox_get_handler).delete(api::outbox_delete_handler),
         );
     #[cfg(feature = "harness")]
     let router = router.route("/", get(harness_page));
@@ -138,12 +154,17 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
             Duration::from_secs(state.cfg.upload_ttl_hours.saturating_mul(3600)),
         );
     }
+    api::spawn_reaper(
+        state.outbox.clone(),
+        Duration::from_secs(state.cfg.upload_ttl_hours.saturating_mul(3600)),
+    );
 
     #[cfg(unix)]
     {
         let manager = state.manager.clone();
+        let outbox = state.outbox.clone();
         tokio::spawn(async move {
-            if let Err(err) = admin_listener(manager).await {
+            if let Err(err) = admin_listener(manager, outbox).await {
                 tracing::error!(%err, "admin socket listener failed");
             }
         });
@@ -506,7 +527,7 @@ pub fn admin_socket_path() -> anyhow::Result<PathBuf> {
 /// Newline-delimited JSON over a unix socket, one request per connection:
 /// `{"op":"list"}` or `{"op":"kill","id":"<uuid>"}`.
 #[cfg(unix)]
-async fn admin_listener(manager: SessionManager) -> anyhow::Result<()> {
+async fn admin_listener(manager: SessionManager, outbox: Outbox) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let path = admin_socket_path()?;
@@ -529,8 +550,9 @@ async fn admin_listener(manager: SessionManager) -> anyhow::Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let manager = manager.clone();
+        let outbox = outbox.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle_admin(stream, manager).await {
+            if let Err(err) = handle_admin(stream, manager, outbox).await {
                 tracing::debug!(%err, "admin connection failed");
             }
         });
@@ -541,6 +563,7 @@ async fn admin_listener(manager: SessionManager) -> anyhow::Result<()> {
 async fn handle_admin(
     stream: tokio::net::UnixStream,
     manager: SessionManager,
+    outbox: Outbox,
 ) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
@@ -549,19 +572,21 @@ async fn handle_admin(
     tokio::io::BufReader::new(reader)
         .read_line(&mut line)
         .await?;
-    let response = admin_response(&manager, line.trim());
+    let response = admin_response(&manager, &outbox, line.trim());
     writer.write_all(response.as_bytes()).await?;
     writer.write_all(b"\n").await?;
     Ok(())
 }
 
 #[cfg(unix)]
-fn admin_response(manager: &SessionManager, line: &str) -> String {
+fn admin_response(manager: &SessionManager, outbox: &Outbox, line: &str) -> String {
     #[derive(serde::Deserialize)]
     struct AdminReq {
         op: String,
         #[serde(default)]
         id: Option<String>,
+        #[serde(default)]
+        path: Option<String>,
     }
 
     let req: AdminReq = match serde_json::from_str(line) {
@@ -589,6 +614,16 @@ fn admin_response(manager: &SessionManager, line: &str) -> String {
                 .collect();
             serde_json::to_string(&sessions).expect("session list serialization cannot fail")
         }
+        // Offering a file is a local-only act on purpose. The admin socket is
+        // owner-only, so the only thing that can put a path in the outbox is a
+        // process already running as the person who owns the machine.
+        "offer" => match req.path.as_deref() {
+            Some(path) => match outbox.offer(path) {
+                Ok(id) => serde_json::json!({ "id": id }).to_string(),
+                Err(message) => serde_json::json!({ "error": message }).to_string(),
+            },
+            None => serde_json::json!({ "error": "offer requires a path" }).to_string(),
+        },
         "kill" => match req.id.as_deref().map(Uuid::parse_str) {
             Some(Ok(id)) => {
                 if manager.kill(id) {
@@ -642,11 +677,17 @@ mod tests {
     }
 
     async fn start(cfg: Config) -> SocketAddr {
+        start_with_state(app_state(cfg)).await
+    }
+
+    /// Serves a state the test built itself, for the cases that need a handle
+    /// on something inside it (the outbox) as well as an address.
+    async fn start_with_state(state: AppState) -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test listener");
         let addr = listener.local_addr().expect("local addr");
-        let app = router(app_state(cfg));
+        let app = router(state);
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("test server");
         });
@@ -938,18 +979,132 @@ mod tests {
         // `test_config` leaves `uploads_enabled` off, which is what every other
         // test in this file runs with.
         let addr = start(test_config()).await;
+
+        // The token endpoint still answers: a token is spent on sessions and
+        // the outbox too, so gating it on the inbox would switch off two
+        // unrelated features. It says so in `features`.
         let resp = http(addr, "POST", "/v1/token", Some(LOGIN), None, b"").await;
-        assert_eq!(resp.status, 404, "{}", resp.body);
+        assert_eq!(resp.status, 200, "{}", resp.body);
+        assert!(!resp.body.contains("\"files\""), "{}", resp.body);
+        assert!(resp.body.contains("sessions"), "{}", resp.body);
+
+        let token = mint_token(addr, "").await;
         let resp = http(
             addr,
             "PUT",
             "/v1/files/a.txt",
             Some(LOGIN),
-            Some("whatever"),
+            Some(&token),
             b"x",
         )
         .await;
         assert_eq!(resp.status, 404, "{}", resp.body);
+    }
+
+    #[tokio::test]
+    async fn sessions_are_listed_and_killable_over_http() {
+        let addr = start(test_config()).await;
+        let token = mint_token(addr, "").await;
+
+        // Nothing running yet.
+        let resp = http(addr, "GET", "/v1/sessions", Some(LOGIN), Some(&token), b"").await;
+        assert_eq!(resp.status, 200, "{}", resp.body);
+        assert_eq!(resp.body.trim(), "[]");
+
+        // Attach one, then look for it from the other side.
+        let mut ws = connect(addr, Some(LOGIN)).await.expect("connect");
+        send(&mut ws, attach_req(None)).await;
+        let ServerFrame::Attached(resp) = recv(&mut ws).await else {
+            panic!("expected ATTACHED");
+        };
+        let session_id = resp.session_id.clone();
+
+        let listed = http(addr, "GET", "/v1/sessions", Some(LOGIN), Some(&token), b"").await;
+        assert!(listed.body.contains(&session_id), "{}", listed.body);
+        assert!(listed.body.contains("\"attached\":true"), "{}", listed.body);
+
+        // And kill it.
+        let killed = http(
+            addr,
+            "DELETE",
+            &format!("/v1/sessions/{session_id}"),
+            Some(LOGIN),
+            Some(&token),
+            b"",
+        )
+        .await;
+        assert_eq!(killed.status, 204, "{}", killed.body);
+
+        let gone = http(
+            addr,
+            "DELETE",
+            &format!("/v1/sessions/{session_id}"),
+            Some(LOGIN),
+            Some(&token),
+            b"",
+        )
+        .await;
+        assert_eq!(gone.status, 404, "killing twice is not a second kill");
+    }
+
+    #[tokio::test]
+    async fn sessions_need_a_token_like_everything_else() {
+        let addr = start(test_config()).await;
+        for (login, token) in [(None, None), (Some(LOGIN), None)] {
+            let resp = http(addr, "GET", "/v1/sessions", login, token, b"").await;
+            assert!(
+                resp.status == 403 || resp.status == 401,
+                "unauthenticated listing answered {}",
+                resp.status
+            );
+        }
+        let resp = http(addr, "GET", "/v1/outbox", Some(LOGIN), None, b"").await;
+        assert_eq!(resp.status, 401, "{}", resp.body);
+    }
+
+    #[tokio::test]
+    async fn an_offered_file_can_be_listed_fetched_and_withdrawn() {
+        let cfg = test_config();
+        let state = app_state(cfg);
+        let outbox = state.outbox.clone();
+        let addr = start_with_state(state).await;
+        let token = mint_token(addr, "").await;
+
+        let path = std::env::temp_dir().join(format!("landline-send-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"from the host").expect("write");
+        let id = outbox.offer(path.to_str().unwrap()).expect("offer");
+
+        let listed = http(addr, "GET", "/v1/outbox", Some(LOGIN), Some(&token), b"").await;
+        assert_eq!(listed.status, 200, "{}", listed.body);
+        assert!(listed.body.contains(&id), "{}", listed.body);
+
+        let fetched = http(
+            addr,
+            "GET",
+            &format!("/v1/outbox/{id}"),
+            Some(LOGIN),
+            Some(&token),
+            b"",
+        )
+        .await;
+        assert_eq!(fetched.status, 200, "{}", fetched.body);
+        assert!(fetched.body.contains("from the host"), "{}", fetched.body);
+
+        let withdrawn = http(
+            addr,
+            "DELETE",
+            &format!("/v1/outbox/{id}"),
+            Some(LOGIN),
+            Some(&token),
+            b"",
+        )
+        .await;
+        assert_eq!(withdrawn.status, 204, "{}", withdrawn.body);
+        assert!(
+            path.exists(),
+            "withdrawing an offer must never delete the host's file"
+        );
+        std::fs::remove_file(&path).ok();
     }
 
     /// argon2id hash of `secret`, for the tests that need a locked host.
