@@ -748,9 +748,16 @@ enum DemoSeed {
     /// than over a CLOSED band.
     static var armsLeader: Bool { mode == "leaderarmed" || mode == "liveleader" }
     static var opensSettings: Bool { mode == "settings" || opensKeyBar }
-    static var opensKeyBar: Bool { mode == "keybar" || opensCustomKey || opensCatalog }
+    static var opensKeyBar: Bool {
+        mode == "keybar" || opensCustomKey || opensCatalog || opensKeyAppearance
+    }
     static var opensCatalog: Bool { mode == "catalog" }
     static var opensCustomKey: Bool { mode == "customkey" || mode == "customkeybad" }
+
+    /// Debug screenshot hook: open the editor for a *catalog* key rather than a
+    /// custom one, which is the variant with no SENDS field and the one that
+    /// has to prove the icon grid draws real glyphs rather than tofu boxes.
+    static var opensKeyAppearance: Bool { mode == "keyicon" }
 
     /// Debug screenshot hook: prefill the custom key editor with a sequence
     /// that parses, or with one that does not, so the refusal can be looked at

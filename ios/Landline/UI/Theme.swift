@@ -367,66 +367,6 @@ struct StatusSquare: View {
     }
 }
 
-/// A sheet of paper with its corner turned, drawn rather than set.
-///
-/// The key bar prints words, and every one of them is a key a keyboard has.
-/// Attaching a file is not that, so it does not get a word: `FILE` sat in the
-/// row reading like a key that types four letters. It is a mark instead, the
-/// same as the tick scale and the registration brackets, drawn on the same
-/// grid at the same weight.
-///
-/// Not an SF Symbol, for the reason DESIGN.md gives the back affordance: this
-/// world draws its own marks. Not a Nerd Font glyph either, which would have
-/// been the cheap answer, because the bundled face is the *terminal's* and the
-/// chrome sets in SF Mono, where that codepoint is a tofu box.
-///
-/// Takes its colour from the foreground style, so the cell's pressed, latched
-/// and disabled states reach it without this knowing they exist.
-struct PageMark: View {
-    /// Sized off the 10pt micro-caps cap height it stands next to, so the mark
-    /// and the words either side of it read as one row rather than as an icon
-    /// dropped into a line of text.
-    var height: CGFloat = 14
-    /// One point, not a hairline. A 0.5pt outline at this size disappears at
-    /// arm's length, which is the light this whole instrument is read in.
-    var lineWidth: CGFloat = 1
-
-    private var width: CGFloat { (height * 0.78).rounded() }
-
-    var body: some View {
-        Page()
-            .stroke(style: StrokeStyle(lineWidth: lineWidth, lineJoin: .miter))
-            .frame(width: width, height: height)
-            .accessibilityHidden(true)
-    }
-
-    private struct Page: Shape {
-        func path(in rect: CGRect) -> Path {
-            // Inset by half the stroke so the outline sits inside the frame and
-            // lands on whole pixels rather than straddling them.
-            let box = rect.insetBy(dx: 0.5, dy: 0.5)
-            // The turned corner. A third of the width is the largest fold that
-            // still reads as a corner rather than as a cut-off page.
-            let fold = (box.width / 3).rounded()
-
-            var path = Path()
-            path.move(to: CGPoint(x: box.minX, y: box.minY))
-            path.addLine(to: CGPoint(x: box.maxX - fold, y: box.minY))
-            path.addLine(to: CGPoint(x: box.maxX, y: box.minY + fold))
-            path.addLine(to: CGPoint(x: box.maxX, y: box.maxY))
-            path.addLine(to: CGPoint(x: box.minX, y: box.maxY))
-            path.closeSubpath()
-
-            // The fold itself, which is what makes it a page and not a
-            // rectangle with a chamfer.
-            path.move(to: CGPoint(x: box.maxX - fold, y: box.minY))
-            path.addLine(to: CGPoint(x: box.maxX - fold, y: box.minY + fold))
-            path.addLine(to: CGPoint(x: box.maxX, y: box.minY + fold))
-            return path
-        }
-    }
-}
-
 /// A sentence a human wrote, with backticked spans rendered in mono so a
 /// machine value inside prose never sets in SF Pro. `Text(String)` does not
 /// parse markdown the way `Text("literal")` does, hence the explicit parse.
