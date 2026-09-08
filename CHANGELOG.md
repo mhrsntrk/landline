@@ -7,7 +7,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing has been released yet. This section covers the initial build.
+Nothing yet.
+
+## [0.2.0] - 2026-09-08
+
+### Added
+
+- File inbox: `POST /v1/token` and `PUT /v1/files/{name}` on the daemon, and an attach key in the
+  app's key bar that picks a photo or a file, uploads it, and types the path it landed at into the
+  session. It exists because a phone cannot otherwise hand a file to whatever is running in the
+  terminal. Normative spec in `docs/FILES.md`.
+- Config keys `uploads_enabled` (default on), `upload_dir` (default `~/.landline/inbox`),
+  `upload_max_bytes` (25 MiB) and `upload_ttl_hours` (72).
+- `landlined doctor` gains a ninth check: where the inbox lands, and whether it is writable.
+
+### Changed
+
+- The default key bar row carries the attach key, third. A stored layout is not migrated, so an
+  existing install adds it from Settings.
+
+## [0.1.0] - 2026-09-04
 
 ### Added
 
@@ -31,4 +50,6 @@ Nothing has been released yet. This section covers the initial build.
 - iOS app scaffold: SwiftUI, SwiftTerm-based terminal view, host list.
 - Packaging (Homebrew tap, `.deb`) and CI across macOS, Linux, and Windows.
 
-[Unreleased]: https://github.com/mhrsntrk/landline/commits/main
+[Unreleased]: https://github.com/mhrsntrk/landline/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mhrsntrk/landline/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/mhrsntrk/landline/releases/tag/v0.1.0
