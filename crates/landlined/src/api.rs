@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use axum::body::Body;
 use axum::extract::{Path as UrlPath, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -30,9 +31,10 @@ use uuid::Uuid;
 use crate::auth::{self, UnlockOutcome, TOKEN_TTL};
 use crate::server::AppState;
 
-/// Longest accepted unlock secret on the token endpoint. Argon2 has no length
-/// limit worth relying on and the body is buffered, so the ceiling is here.
-pub const MAX_SECRET_LEN: usize = 1024;
+/// Longest accepted unlock secret on the token endpoint. Re-exported from
+/// `auth`, which enforces the same ceiling on the WebSocket UNLOCK frame, so
+/// the two doors cannot drift apart.
+pub use crate::auth::MAX_SECRET_LEN;
 
 // ---- shared shapes ----
 
@@ -314,7 +316,11 @@ impl Outbox {
         if ttl.is_zero() {
             return 0;
         }
-        let cutoff = now_secs() - ttl.as_secs() as i64;
+        // Saturating, not a bare cast: an absurd `upload_ttl_hours` overflows
+        // i64, wraps the cutoff into the future, and the sweep then drops every
+        // offer it has. The session reaper already guards this the same way.
+        let ttl_secs = i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX);
+        let cutoff = now_secs().saturating_sub(ttl_secs);
         let mut entries = self.entries.lock().unwrap();
         let before = entries.len();
         entries.retain(|entry| entry.offered_at > cutoff);
@@ -393,23 +399,69 @@ pub async fn outbox_get_handler(
     let Some(entry) = state.outbox.take(&id) else {
         return err(StatusCode::NOT_FOUND, "no_such_offer");
     };
-    // Read at fetch time, not at offer time. The alternative is holding a copy
-    // of every offered file in memory for as long as the offer stands.
-    let Ok(bytes) = std::fs::read(&entry.path) else {
-        return err(StatusCode::NOT_FOUND, "offer_gone");
+    // Opened at fetch time, not at offer time, so an offer costs nothing to
+    // stand and a file that changed on disk is served as it now is.
+    //
+    // Streamed rather than read whole. `landlined send` puts no ceiling on what
+    // can be offered (a disk image is a legitimate thing to hand yourself), and
+    // reading one into a `Vec` would pin a worker thread for the length of the
+    // read and then OOM the daemon on a big enough file, taking every live
+    // shell session with it.
+    let file = match tokio::fs::File::open(&entry.path).await {
+        Ok(file) => file,
+        Err(_) => return err(StatusCode::NOT_FOUND, "offer_gone"),
     };
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", entry.name.replace('"', "")),
-            ),
-        ],
-        bytes,
-    )
-        .into_response()
+    let length = file.metadata().await.map(|meta| meta.len()).ok();
+
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_DISPOSITION, disposition(&entry.name));
+    if let Some(length) = length {
+        response = response.header(header::CONTENT_LENGTH, length);
+    }
+    response
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "offer_unreadable"))
+}
+
+/// A `Content-Disposition` value that is a valid header whatever the file is
+/// called.
+///
+/// Unix file names may contain almost anything, including quotes, backslashes
+/// and control bytes, and a name carrying one produced either a malformed
+/// quoted-string or a `HeaderValue` that fails to build at all, turning the
+/// fetch into a bare 500. So the quoted form is reduced to a conservative
+/// ASCII subset, and the real name travels in RFC 5987 `filename*`, which is
+/// what any client written this decade reads.
+fn disposition(name: &str) -> String {
+    let fallback: String = name
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => ch,
+            _ => '-',
+        })
+        .take(80)
+        .collect();
+    let fallback = if fallback.trim_matches('-').is_empty() {
+        "file".to_string()
+    } else {
+        fallback
+    };
+
+    // Percent-encode everything outside the RFC 5987 attribute character set.
+    let encoded: String = name
+        .bytes()
+        .map(|byte| match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'~' => {
+                (byte as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect();
+
+    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 /// `DELETE /v1/outbox/{id}`: withdraw an offer.
@@ -495,6 +547,48 @@ mod tests {
         assert!(outbox.entries.lock().unwrap().len() <= MAX_OUTBOX_ENTRIES);
         assert!(outbox.take(&first).is_none(), "the oldest offer falls off");
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_disposition_is_a_valid_header_for_any_name() {
+        use axum::http::HeaderValue;
+
+        // Unix names may hold quotes, backslashes, control bytes and any UTF-8
+        // at all. Each of these used to produce either a malformed
+        // quoted-string or a HeaderValue that fails to build, turning a fetch
+        // into a bare 500.
+        for name in [
+            "report.pdf",
+            "r\u{e9}sum\u{e9}.pdf",
+            "back\\slash.txt",
+            "quote\".txt",
+            "new\nline.txt",
+            "\u{4e2d}\u{6587}.txt",
+            "...",
+            "",
+        ] {
+            let value = disposition(name);
+            assert!(
+                HeaderValue::from_str(&value).is_ok(),
+                "{name:?} produced an unusable header: {value:?}"
+            );
+            assert!(value.starts_with("attachment; filename=\""));
+            assert!(value.contains("filename*=UTF-8''"), "{value}");
+        }
+    }
+
+    #[test]
+    fn a_disposition_keeps_an_ordinary_name_readable() {
+        let value = disposition("report.pdf");
+        assert!(value.contains("filename=\"report.pdf\""), "{value}");
+        assert!(value.contains("filename*=UTF-8''report.pdf"), "{value}");
+    }
+
+    #[test]
+    fn a_disposition_never_falls_back_to_an_empty_name() {
+        // Everything strippable: the quoted form still has to name something.
+        assert!(disposition("///").contains("filename=\"file\""));
+        assert!(disposition("").contains("filename=\"file\""));
     }
 
     #[test]

@@ -97,6 +97,7 @@ serve            ok
 listener         ok
 admin socket     ok
 allowed_logins   ok (1 login(s))
+file inbox       ok (/Users/you/.landline/inbox (max 25 MiB))
 app url          ok (wss://macbook.tail1a2b3.ts.net/v1/shell)
 ```
 
@@ -219,6 +220,12 @@ The config file is written with mode `0600` on Unix.
 | `landlined sessions list` | List live and detached sessions. |
 | `landlined sessions kill <id>` | Terminate one session. |
 | `landlined send <path>` | Offer a file to the phone. Registers the path; the app fetches it and the file is never moved or deleted. |
+
+Downloads come in two forms. The plain `landlined-<target>` binaries are what `install.sh` and
+the Homebrew bottle use, and neither attaches a quarantine attribute. The `.zip` next to them is
+signed with a Developer ID and notarized, which is what you want if you download through a
+browser: macOS refuses to run an unsigned quarantined executable, and for a CLI there is no
+right-click-open way round it. Linux also gets a `.deb`.
 | `landlined config-path` | Print the config file path. |
 | `landlined set-unlock [--clear]` | Prompt for an unlock secret and argon2id hash it into the config, or clear it. |
 

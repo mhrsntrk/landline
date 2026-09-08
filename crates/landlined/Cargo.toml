@@ -3,6 +3,8 @@ name = "landlined"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Also the .deb's description field, which cargo-deb warns about when absent.
+description = "Landline host daemon: your terminal, on your tailnet"
 
 [dependencies]
 landline-proto.workspace = true
@@ -23,6 +25,7 @@ serde_json.workspace = true
 rpassword = "7"
 rand = "0.8"
 futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
 
 [features]
 harness = []
@@ -34,6 +37,8 @@ futures-util = "0.3"
 # cargo-deb packaging metadata; consumed by `cargo deb -p landlined` for the
 # Linux .deb build. See packaging/ for the rest of the release pipeline.
 [package.metadata.deb]
+# Explicit, so the packaged binary is stripped regardless of which strip the
+# host offers (cross-strip warns and skips on macOS).
 maintainer = "mhrsntrk <m@mhrsntrk.com>"
 extended-description = "Landline host daemon: exposes local PTY sessions over a WebSocket API for the landline iOS app, meant to sit behind `tailscale serve` on the same host. Requires Tailscale to already be installed and running; it is not pulled in as a package dependency."
 depends = "libc6"

@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -191,6 +191,21 @@ struct Inner {
     sessions: RwLock<HashMap<Uuid, Arc<Session>>>,
     max_sessions: usize,
     scrollback_bytes: usize,
+    /// Sessions whose slot is reserved but whose PTY has not finished spawning.
+    /// Counted towards `max_sessions` so the cap holds while `create` is
+    /// outside the registry lock. See `PendingSlot`.
+    pending: AtomicUsize,
+}
+
+/// Releases a reserved session slot when `create` returns, however it returns.
+struct PendingSlot {
+    inner: Arc<Inner>,
+}
+
+impl Drop for PendingSlot {
+    fn drop(&mut self) {
+        self.inner.pending.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl SessionManager {
@@ -200,6 +215,7 @@ impl SessionManager {
                 sessions: RwLock::new(HashMap::new()),
                 max_sessions,
                 scrollback_bytes,
+                pending: AtomicUsize::new(0),
             }),
         }
     }
@@ -235,12 +251,28 @@ impl SessionManager {
     }
 
     fn create(&self, args: &AttachArgs) -> Result<Arc<Session>, AttachError> {
-        // Hold the write lock across the capacity check and insert so two
-        // racing creates cannot both slip under the limit.
-        let mut sessions = self.inner.sessions.write().unwrap();
-        if sessions.len() >= self.inner.max_sessions {
-            return Err(AttachError::TooManySessions);
+        // Reserve a slot under the lock, then release it before spawning.
+        //
+        // The capacity check still has to be atomic against a racing create, or
+        // two could both slip under the limit. What must *not* happen is
+        // holding the registry's write lock across `pty::spawn`, which does a
+        // blocking openpty and fork/exec: a slow shell start (cold disk, fork
+        // latency, a scanner) would otherwise stall every session listing, the
+        // admin socket, the reaper, and the pump's own exit-removal, all of
+        // which want this lock.
+        {
+            let sessions = self.inner.sessions.read().unwrap();
+            if sessions.len() + self.inner.pending.load(Ordering::SeqCst) >= self.inner.max_sessions
+            {
+                return Err(AttachError::TooManySessions);
+            }
         }
+        self.inner.pending.fetch_add(1, Ordering::SeqCst);
+        // Whatever happens next, the reservation is released exactly once.
+        let _reservation = PendingSlot {
+            inner: Arc::clone(&self.inner),
+        };
+
         let (pty, events) = pty::spawn(
             &args.program,
             &args.args,
@@ -262,8 +294,11 @@ impl SessionManager {
             last_seen: AtomicI64::new(now),
             size: Mutex::new((args.cols, args.rows)),
         });
-        sessions.insert(session.id, Arc::clone(&session));
-        drop(sessions);
+        self.inner
+            .sessions
+            .write()
+            .unwrap()
+            .insert(session.id, Arc::clone(&session));
         spawn_pump(Arc::clone(&self.inner), Arc::clone(&session), events);
         tracing::info!(id = %session.id, shell = %session.shell, "session created");
         Ok(session)
@@ -311,15 +346,7 @@ impl SessionManager {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                let now = now_unix();
-                let stale: Vec<Arc<Session>> = inner
-                    .sessions
-                    .read()
-                    .unwrap()
-                    .values()
-                    .filter(|s| !s.attached() && now.saturating_sub(s.last_seen()) > ttl_secs)
-                    .cloned()
-                    .collect();
+                let stale = stale_sessions(&inner, now_unix(), ttl_secs);
                 for session in stale {
                     tracing::info!(id = %session.id, "reaping idle session past ttl");
                     session.kill();
@@ -328,6 +355,23 @@ impl SessionManager {
             }
         });
     }
+}
+
+/// The sessions a sweep at `now` should reap: detached, and last seen longer
+/// than `ttl_secs` ago.
+///
+/// Split out of the reaper task so the rule can be tested. Getting either half
+/// of it backwards kills live work on a sixty second cadence, which is the kind
+/// of thing that wants an assertion rather than a careful reading.
+fn stale_sessions(inner: &Arc<Inner>, now: i64, ttl_secs: i64) -> Vec<Arc<Session>> {
+    inner
+        .sessions
+        .read()
+        .unwrap()
+        .values()
+        .filter(|s| !s.attached() && now.saturating_sub(s.last_seen()) > ttl_secs)
+        .cloned()
+        .collect()
 }
 
 /// Long-lived per-session task: pumps PTY output into the ring and to the
@@ -366,12 +410,101 @@ fn spawn_pump(inner: Arc<Inner>, session: Arc<Session>, mut events: pty::PtyEven
         // remove the session.
         let code = events.exit.await.unwrap_or(u32::MAX);
         {
-            let attached = session.attached.lock().unwrap();
-            if let Some(client) = attached.as_ref() {
+            // Take the slot rather than borrow it. The EXIT below is best
+            // effort: if the client's channel happens to be full at this
+            // instant the frame is dropped, and a client whose `tx` stayed
+            // parked in this slot would then never see its `rx` close either.
+            // It would sit on a session that has left the registry, draining
+            // its backlog and answering pings, with nothing left to tell it.
+            // Dropping the sender at the end of this scope closes the receiver,
+            // so the connection tears down even when the frame is lost.
+            let client = session.attached.lock().unwrap().take();
+            if let Some(client) = client {
                 let _ = client.tx.try_send(ServerFrame::Exit(code));
             }
         }
         inner.sessions.write().unwrap().remove(&session.id);
         tracing::info!(id = %session.id, code, "session exited");
     });
+}
+
+#[cfg(all(test, unix))]
+mod reaper_tests {
+    use super::*;
+
+    /// A manager holding one session, spawned from a shell that will sit there.
+    fn manager_with_session() -> (SessionManager, Arc<Session>) {
+        let manager = SessionManager::new(4, 4096);
+        let attachment = manager
+            .attach(AttachArgs {
+                session_id: None,
+                program: "/bin/sh".to_string(),
+                args: vec![],
+                cwd: None,
+                cols: 80,
+                rows: 24,
+            })
+            .expect("attach");
+        let session = manager
+            .inner
+            .sessions
+            .read()
+            .unwrap()
+            .values()
+            .next()
+            .cloned()
+            .expect("one session");
+        // Keep the attachment alive for as long as the caller wants it.
+        std::mem::forget(attachment);
+        (manager, session)
+    }
+
+    #[tokio::test]
+    async fn an_attached_session_is_never_reaped() {
+        let (manager, session) = manager_with_session();
+        // Attached, and idle far past any ttl: still not stale. Reaping a
+        // session someone is looking at is the one unrecoverable mistake here.
+        session.last_seen.store(0, Ordering::SeqCst);
+        let stale = stale_sessions(&manager.inner, 1_000_000, 1);
+        assert!(stale.is_empty(), "an attached session must survive its ttl");
+    }
+
+    #[tokio::test]
+    async fn a_detached_session_past_its_ttl_is_reaped() {
+        let (manager, session) = manager_with_session();
+        *session.attached.lock().unwrap() = None;
+        session.last_seen.store(0, Ordering::SeqCst);
+
+        let stale = stale_sessions(&manager.inner, 1_000, 100);
+        assert_eq!(stale.len(), 1, "detached and long idle is exactly the case");
+        assert_eq!(stale[0].id, session.id);
+    }
+
+    #[tokio::test]
+    async fn a_detached_session_inside_its_ttl_survives() {
+        let (manager, session) = manager_with_session();
+        *session.attached.lock().unwrap() = None;
+        session.last_seen.store(950, Ordering::SeqCst);
+
+        // 50 seconds idle against a 100 second ttl.
+        assert!(stale_sessions(&manager.inner, 1_000, 100).is_empty());
+        // And exactly at the ttl it is still not *past* it.
+        session.last_seen.store(900, Ordering::SeqCst);
+        assert!(
+            stale_sessions(&manager.inner, 1_000, 100).is_empty(),
+            "the boundary is exclusive"
+        );
+        session.last_seen.store(899, Ordering::SeqCst);
+        assert_eq!(stale_sessions(&manager.inner, 1_000, 100).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_saturating_ttl_reaps_nothing() {
+        // `session_ttl_hours` large enough to overflow the seconds cast used to
+        // wrap negative and reap everything; it must simply never fire.
+        let (manager, session) = manager_with_session();
+        *session.attached.lock().unwrap() = None;
+        session.last_seen.store(0, Ordering::SeqCst);
+        assert!(stale_sessions(&manager.inner, i64::MAX, i64::MAX).is_empty());
+    }
 }

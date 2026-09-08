@@ -87,13 +87,19 @@ final class AttachmentTests: XCTestCase {
     /// paste rather than as typing, which is the difference between the path
     /// appearing and the prompt submitting.
     func testBracketedPasteWrapsThePath() {
-        let bytes = PathInsertion.bytes(for: "/Users/x/.landline/inbox/shot-ab12cd34.png",
-                                        bracketedPaste: true)
+        let path = "/Users/x/.landline/inbox/shot-ab12cd34.png"
+        let bytes = PathInsertion.bytes(for: path, bracketedPaste: true)
+
         XCTAssertEqual(Array(bytes.prefix(6)), [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e])
-        XCTAssertEqual(Array(bytes.suffix(6)), [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e])
-        let inner = String(decoding: bytes.dropFirst(6).dropLast(6), as: UTF8.self)
-        XCTAssertEqual(inner, "/Users/x/.landline/inbox/shot-ab12cd34.png ",
-                       "a trailing space separates the path from what is typed next")
+        // The wrapper closes around the path alone. The separating space is
+        // typed *after* it: inside, it would be part of the pasted text, shown
+        // as pasted content and counted into whatever the receiver treats as
+        // the pasted unit. `Snippet.bytes` keeps its return outside for the
+        // same reason.
+        XCTAssertEqual(Array(bytes.suffix(7)), [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e, 0x20])
+
+        let inner = String(decoding: bytes.dropFirst(6).dropLast(7), as: UTF8.self)
+        XCTAssertEqual(inner, path, "only the path is inside the wrapper")
     }
 
     func testAPlainTerminalGetsThePathWithoutMarkers() {

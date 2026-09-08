@@ -8,14 +8,14 @@ Also read as `CLAUDE.md`; the file is symlinked so both conventions find it.
 ## Commands
 
 ```sh
-cargo test --workspace                                   # 99 tests
+cargo test --workspace                                   # 107 tests
 cargo clippy --workspace --all-targets -- -D warnings     # must be silent
 cargo fmt --all
 
 cd ios && xcodegen generate                               # the .xcodeproj is generated, never edited
 xcodebuild -project Landline.xcodeproj -scheme Landline \
   -destination 'generic/platform=iOS Simulator' \
-  -skipPackagePluginValidation build                      # 264 tests via `test`
+  -skipPackagePluginValidation build                      # 283 tests via `test`
 ```
 
 `-skipPackagePluginValidation` is required: SwiftTerm ships a build-tool plugin
@@ -72,6 +72,15 @@ Each of these cost real time. They are listed because they will recur.
 - **Do not assert on a kill you did not wait for.** `SessionManager::kill` terminates the child;
   the session leaves the registry when the pump observes the exit. A test that kills and then
   asserts the id is gone passes on a fast machine and fails in CI.
+- **`stapler` cannot staple a CLI.** It writes tickets onto `.app`, `.dmg` and `.pkg` only, and
+  refuses both a bare Mach-O and a zip containing one. Notarize the zip and let Gatekeeper fetch
+  the ticket online; do not add a staple step back.
+- **Retire a `Connection` in `tearDown`.** A test that ends mid-backoff leaves a live reconnect
+  timer on an object nothing released, and the next test's run-loop pump fires it, opening a socket
+  that test never asked for. Passes locally where the timing rarely lines up; fails in CI.
+- **A dying socket delivers one failure per frame in flight.** Anything that treats a transport
+  failure as an event rather than as a state has to retire the socket's epoch first, or a handful
+  of queued keystrokes each count as their own reconnect attempt.
 - **Homebrew needs a bottle.** A formula without one is treated as a source
   build, and Homebrew then refuses on any machine with outdated Command Line
   Tools, even though `install` only copies a compiled binary.

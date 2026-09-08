@@ -126,6 +126,7 @@ struct SessionsView: View {
         return "\(seconds / 86_400)d"
     }
 
+    @MainActor
     private func load() async {
         loading = true
         defer { loading = false }
@@ -138,6 +139,7 @@ struct SessionsView: View {
         }
     }
 
+    @MainActor
     private func kill(_ session: HostSession) async {
         killing = session.id
         defer { killing = nil }

@@ -2,18 +2,67 @@ name: ci
 on:
   push: { branches: [main] }
   pull_request:
+
+permissions:
+  contents: read
+
 jobs:
-  test:
+  rust:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Deliberately a moving ref: the point of this job is that the code
+      # still builds on whatever stable is now. Every other action is pinned
+      # to a commit, because a tag can be repointed and `softprops` in
+      # particular runs with write access to the release.
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  # The app is the other half of the wire protocol, and until this existed a
+  # regression in `Frame.swift` landed green: only the Rust copy was ever
+  # machine-checked, while the rule says all three move together.
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate the project
+        working-directory: ios
+        run: xcodegen generate
+
+      # `-skipPackagePluginValidation` is required: SwiftTerm ships a build-tool
+      # plugin that headless xcodebuild refuses without it.
+      - name: Test
+        working-directory: ios
+        run: |
+          set -eu
+          simulator=$(xcrun simctl list devices available --json \
+            | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(dev['udid'] for runtime in sorted(d) if 'iOS' in runtime for dev in d[runtime] if dev.get('isAvailable')))")
+          echo "using simulator $simulator"
+          xcodebuild -project Landline.xcodeproj -scheme Landline \
+            -destination "id=$simulator" \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+  # A network daemon fronting PTYs should not be the last to hear about an
+  # advisory in axum, tokio-tungstenite or argon2. Cargo.lock is committed;
+  # nothing was ever reading it.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

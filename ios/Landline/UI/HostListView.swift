@@ -729,8 +729,12 @@ final class HostReachability {
         for host in hosts where !host.hostname.isEmpty {
             diagnoses[host.id] = .checking
             Task { [weak self] in
-                let diagnosis = await Self.probeOne(host: host, session: self?.session ?? .shared)
-                await MainActor.run { self?.diagnoses[host.id] = diagnosis }
+                // Bound once rather than reached for on both sides of the
+                // suspension: capturing the var and reading it twice across an
+                // await is a warning today and an error in Swift 6.
+                guard let self else { return }
+                let diagnosis = await Self.probeOne(host: host, session: self.session)
+                await MainActor.run { self.diagnoses[host.id] = diagnosis }
             }
         }
     }
@@ -746,7 +750,18 @@ final class HostReachability {
             // daemon is running and does not know you". Both used to read as a
             // green square.
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            return status == 403 ? .loginNotAllowed : .reachable
+            switch status {
+            case 403:
+                return .loginNotAllowed
+            // `tailscale serve` answers these itself when its backend is not
+            // there, which is precisely the "daemon is down" case. Treating
+            // every non-403 status as reachable painted it green and left the
+            // advice that names it unreachable.
+            case 502, 503, 504:
+                return .daemonDown
+            default:
+                return .reachable
+            }
         } catch let error as URLError {
             switch error.code {
             case .cannotFindHost, .dnsLookupFailed:
@@ -781,6 +796,8 @@ enum HostDiagnosis: Equatable {
     case loginNotAllowed
     case nameDoesNotResolve
     case noAnswer
+    /// Serve answered, its backend did not.
+    case daemonDown
     case tlsFailed
     case noNetwork
 
@@ -788,7 +805,7 @@ enum HostDiagnosis: Equatable {
         switch self {
         case .reachable: return .connected
         case .checking: return .connecting
-        case .loginNotAllowed, .tlsFailed: return .failed
+        case .loginNotAllowed, .tlsFailed, .daemonDown: return .failed
         case .unknown, .nameDoesNotResolve, .noAnswer, .noNetwork: return .offline
         }
     }
@@ -800,6 +817,7 @@ enum HostDiagnosis: Equatable {
         case .loginNotAllowed: return "NOT ALLOWED"
         case .nameDoesNotResolve: return "NO SUCH NAME"
         case .noAnswer: return "NO ANSWER"
+        case .daemonDown: return "DAEMON DOWN"
         case .tlsFailed: return "TLS FAILED"
         case .noNetwork: return "NO NETWORK"
         }
@@ -816,6 +834,8 @@ enum HostDiagnosis: Equatable {
             return "That name did not resolve. Check the hostname, and that Tailscale is connected on this phone with MagicDNS on."
         case .noAnswer:
             return "Nothing answered on that port. Check `landlined doctor` on the host: the daemon may be down, or `tailscale serve` may not be forwarding to it."
+        case .daemonDown:
+            return "Tailscale answered but the daemon behind it did not. Start it with `landlined install`, or check `landlined doctor` on that machine."
         case .tlsFailed:
             return "The TLS handshake failed. `tailscale serve` terminates TLS for the ts.net name, so this usually means serve is not set up on that machine."
         case .noNetwork:

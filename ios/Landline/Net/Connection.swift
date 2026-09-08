@@ -123,6 +123,9 @@ final class Connection {
     /// session waiting.
     private var reconnectAttempts = 0
     private var reconnectTimer: Timer?
+    /// True once this connection has reached ATTACHED at least once, which is
+    /// what makes an automatic retry honest. See `close(reason:)`.
+    private var everAttached = false
     /// Identifies the live transport. A cancelled URLSessionWebSocketTask still
     /// delivers its failure asynchronously, so without this the old socket's
     /// error tears down the socket that replaced it (seen on the SESSION_GONE
@@ -162,6 +165,7 @@ final class Connection {
         self.resumeSessionID = host.lastSessionID
         self.retriedAfterSessionGone = false
         self.reconnectAttempts = 0
+        self.everAttached = false
         openTransport()
     }
 
@@ -177,9 +181,20 @@ final class Connection {
         case .connecting, .attaching, .needsUnlock, .live:
             break
         }
+        // The epoch this frame is going out on. A send completion is delivered
+        // asynchronously and long after the socket it belonged to can have been
+        // replaced: without this, every frame in flight when a socket dies
+        // lands as its own `close()`, which multiply-counts reconnect attempts
+        // (a burst of queued keys can spend all of them at once) and, worse,
+        // can nil out the *replacement* transport that the backoff already
+        // opened. `onMessage` has always been guarded this way; this path was
+        // not.
+        let sendingEpoch = epoch
         transport?.send(frame.encode()) { [weak self] error in
-            if let error {
-                DispatchQueue.main.async { self?.close(reason: error.localizedDescription) }
+            guard let error else { return }
+            DispatchQueue.main.async {
+                guard let self, self.epoch == sendingEpoch else { return }
+                self.close(reason: error.localizedDescription)
             }
         }
     }
@@ -260,6 +275,13 @@ final class Connection {
         case .attached(let resp):
             resumeSessionID = resp.sessionID
             reconnectAttempts = 0
+            // The one-shot fresh-attach downgrade is spent per *loss*, not per
+            // screen. Left set, a session that was resumed once after a
+            // SESSION_GONE would refuse to recover from the next one hours
+            // later (a daemon restart, say) and close instead, recoverable only
+            // by the manual button.
+            retriedAfterSessionGone = false
+            everAttached = true
             lastPongAt = Date()
             state = .live(resp)
             startPinging()
@@ -298,12 +320,26 @@ final class Connection {
     /// the session is still on the daemon and a phone's network drops for
     /// reasons that pass. A failure before ever attaching is not retried the
     /// same way: a wrong hostname does not become right.
+    ///
+    /// The test for that is whether *this* connection ever reached ATTACHED,
+    /// not whether a session id is stored. Keying on the id meant every host
+    /// opened even once before would cycle six backoff attempts against a
+    /// machine that was renamed or switched off, under a band promising the
+    /// session would be resumed, which nothing had checked.
     private func close(reason: String) {
         // Ignore late errors from a socket we already replaced or retired.
         if case .closed = state { return }
         stopPinging()
+        // Retire this socket's epoch here, not only when the next one opens.
+        // A dying socket delivers a failure per frame still in flight, and
+        // every one of them reaches this function: without retiring the epoch
+        // now, each counts as its own reconnect attempt and a handful of queued
+        // keystrokes can spend the entire budget before the first retry runs.
+        epoch &+= 1
+        transport?.onMessage = nil
+        transport?.cancel()
         transport = nil
-        if resumeSessionID != nil {
+        if everAttached {
             scheduleReconnect(reason: reason)
         } else {
             state = .closed(reason: reason)

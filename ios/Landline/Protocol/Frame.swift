@@ -182,6 +182,11 @@ enum ServerFrame: Equatable {
             guard payload.count == 4 else { throw FrameError.badPayload(type: type) }
             return .exit(payload.readUInt32BE(at: payload.startIndex))
         case 0x84:
+            // PROTOCOL.md fixes PING and PONG at exactly 8 opaque bytes, and
+            // the Rust codec rejects anything else. This copy accepted any
+            // length, which is the kind of quiet divergence the three-copy rule
+            // exists to prevent.
+            guard payload.count == 8 else { throw FrameError.badPayload(type: type) }
             return .pong(payload)
         case 0x85:
             guard let err = try? JSONDecoder().decode(ErrPayload.self, from: payload) else {
