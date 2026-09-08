@@ -7,7 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-08
+
 ### Fixed
+
+- Concurrent unlock requests now share one serialized verification budget, including requests
+  abandoned during verification. Oversized attempts cannot overflow the failure counter.
+- Simultaneous attaches cannot exceed the configured session limit.
+- A manually verified unlock secret is reused in memory for HTTP requests. Background polling
+  stops retrying rejected credentials instead of silently locking the host out.
+- Terminal resize and keystrokes wait for authentication; the latest geometry is sent after attach.
+- iOS downloads host offers directly to a temporary file, avoiding file-sized memory allocations.
+- Homebrew binaries and bottle metadata are published in one formula update, preventing competing
+  release jobs from overwriting each other. iOS build 18 includes the client fixes.
 
 - The outbox served a fetch by reading the whole file into memory with a blocking call, so a large
   offer could take the daemon down and every live session with it. It streams now.
@@ -93,6 +105,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - iOS app scaffold: SwiftUI, SwiftTerm-based terminal view, host list.
 - Packaging (Homebrew tap, `.deb`) and CI across macOS, Linux, and Windows.
 
-[Unreleased]: https://github.com/mhrsntrk/landline/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/mhrsntrk/landline/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mhrsntrk/landline/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mhrsntrk/landline/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mhrsntrk/landline/releases/tag/v0.1.0

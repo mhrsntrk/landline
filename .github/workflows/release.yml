@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: daemon-release
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -39,10 +43,8 @@ jobs:
 
       - run: cargo build --release -p landlined --target ${{ matrix.target }}
 
-      # TODO(signing): codesign the binary with a Developer ID Application
-      # cert, then `xcrun notarytool submit --wait` + `xcrun stapler staple`
-      # go here once we have a cert. Unsigned binaries work fine for now;
-      # Gatekeeper just warns on first launch.
+      # Signed browser-download zips are produced on the signing Mac with
+      # packaging/sign-macos.sh after publication. Plain assets feed Homebrew.
 
       - name: Package
         run: |
@@ -248,39 +250,6 @@ jobs:
           path: landline.rb
           if-no-files-found: error
 
-  # Needs a TAP_TOKEN secret (a PAT with contents:write on homebrew-tap).
-  # GITHUB_TOKEN cannot reach another repository. Without the secret this job
-  # fails and everything else still stands, so the formula can be pushed by
-  # hand as a fallback.
-  homebrew-push:
-    needs: homebrew-formula
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: homebrew-formula
-
-      - name: Push it to the tap
-        env:
-          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
-        run: |
-          set -eu
-          if [ -z "${TAP_TOKEN:-}" ]; then
-            echo "::error::TAP_TOKEN is not set; push the rendered formula by hand" >&2
-            exit 1
-          fi
-          version="${GITHUB_REF_NAME#v}"
-          git clone --depth 1 \
-            "https://x-access-token:${TAP_TOKEN}@github.com/mhrsntrk/homebrew-tap.git" tap
-          mkdir -p tap/Formula
-          cp landline.rb tap/Formula/landline.rb
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/landline.rb
-          git diff --quiet --cached || git commit -m "landline $version"
-          git push
-
   # Homebrew treats a formula with no bottle as a source build, even though our
   # install only copies an already-compiled binary, and then refuses to proceed
   # on any machine whose Command Line Tools are out of date. A real user hit
@@ -357,25 +326,42 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             bottles/landline-*.bottle.tar.gz --clobber
 
-      - name: Merge the checksums into the formula
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: homebrew-formula
+          path: formula
+
+      - name: Merge bottles into this release's rendered formula
+        run: |
+          set -eu
+          brew tap-new --no-git mhrsntrk/local
+          local_formula="$(brew --repository)/Library/Taps/mhrsntrk/homebrew-local/Formula/landline.rb"
+          cp formula/landline.rb "$local_formula"
+          brew bottle --merge --write --no-commit bottles/landline--*.bottle.json
+          cp "$local_formula" formula/landline.rb
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: homebrew-formula-bottled
+          path: formula/landline.rb
+          if-no-files-found: error
+
+      # The only tap writer. A missing cross-repository PAT does not prevent
+      # building bottles or rendering the final formula for a local push.
+      - name: Publish the complete formula
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
           set -eu
           if [ -z "${TAP_TOKEN:-}" ]; then
-            echo "::error::TAP_TOKEN is not set; merge the bottle block by hand" >&2
-            exit 1
+            echo "::warning::TAP_TOKEN is not set. Publish the homebrew-formula-bottled artifact from an authenticated checkout."
+            exit 0
           fi
-          version="${GITHUB_REF_NAME#v}"
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/mhrsntrk/homebrew-tap.git" tap
-          brew tap-new --no-git mhrsntrk/local 2>/dev/null || true
-          cp tap/Formula/landline.rb "$(brew --repository)/Library/Taps/mhrsntrk/homebrew-local/Formula/"
-          # `--merge --write` folds every runner's json into one bottle block.
-          brew bottle --merge --write --no-commit bottles/landline--*.bottle.json
-          cp "$(brew --repository)/Library/Taps/mhrsntrk/homebrew-local/Formula/landline.rb" tap/Formula/landline.rb
+          cp formula/landline.rb tap/Formula/landline.rb
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/landline.rb
-          git diff --quiet --cached || git commit -m "landline $version: bottles"
+          git diff --quiet --cached || git commit -m "landline ${GITHUB_REF_NAME#v}: binaries and bottles"
           git push

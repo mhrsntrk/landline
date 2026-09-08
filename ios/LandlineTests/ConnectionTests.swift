@@ -118,6 +118,47 @@ final class ConnectionTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.02))
     }
 
+    func testResizeAndInputWaitForTheHandshake() {
+        connection.connect(host: host, cols: 80, rows: 24)
+        let socket = live
+        connection.send(.stdin(Data("ignored".utf8)))
+        connection.send(.resize(cols: 100, rows: 30))
+        socket.deliverJSON(type: 0x86, #"{"attempts_left":10}"#)
+        settle()
+        connection.send(.resize(cols: 90, rows: 20))
+        connection.send(.stdin(Data("ignored".utf8)))
+        XCTAssertEqual(socket.sentTypes, [0x03])
+        connection.send(.unlock("manual"))
+        XCTAssertEqual(socket.sentTypes, [0x03, 0x05])
+        attach(socket)
+        settle()
+        XCTAssertEqual(socket.sentTypes, [0x03, 0x05, 0x02])
+        XCTAssertEqual(Array(socket.sentRaw.last!.suffix(4)), [0, 90, 0, 20])
+        XCTAssertEqual(connection.unlockedSecret, "manual")
+        connection.send(.stdin(Data("live".utf8)))
+        XCTAssertEqual(socket.sentTypes.last, 0x01)
+    }
+
+    func testOnlyAnAcceptedUnlockBecomesTheHTTPSecret() {
+        connection.connect(host: host, cols: 80, rows: 24)
+        live.deliverJSON(type: 0x86, #"{"attempts_left":10}"#)
+        settle()
+        connection.send(.unlock("wrong"))
+        XCTAssertNil(connection.unlockedSecret)
+        live.deliverJSON(type: 0x86, #"{"attempts_left":9}"#)
+        settle()
+        XCTAssertNil(connection.unlockedSecret)
+        connection.send(.unlock("correct"))
+        attach(live)
+        settle()
+        XCTAssertEqual(connection.unlockedSecret, "correct")
+        live.fail()
+        settle()
+        XCTAssertEqual(connection.unlockedSecret, "correct", "a transport retry retains the accepted secret")
+        connection.disconnect(sendDetach: false)
+        XCTAssertNil(connection.unlockedSecret)
+    }
+
     // MARK: Retry only what deserves it
 
     /// A link that never attached is not retried: a wrong hostname does not

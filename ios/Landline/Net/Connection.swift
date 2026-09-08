@@ -104,6 +104,9 @@ final class Connection {
     private let makeTransport: () -> WebSocketTransport
     private var transport: WebSocketTransport?
     private var host: Host?
+    /// The secret accepted by this logical connection, held only in memory.
+    private(set) var unlockedSecret: String?
+    private var unlockCandidate: String?
     private var cols = 80
     private var rows = 24
     /// Session id we are trying to resume on this connection, if any.
@@ -159,6 +162,9 @@ final class Connection {
     // MARK: Public API
 
     func connect(host: Host, cols: Int, rows: Int) {
+        if self.host?.id != host.id || self.host?.wsURL != host.wsURL {
+            unlockedSecret = nil
+        }
         self.host = host
         self.cols = cols
         self.rows = rows
@@ -170,16 +176,21 @@ final class Connection {
     }
 
     func send(_ frame: ClientFrame) {
-        // Guard against frames fired before the handshake or after teardown;
-        // a nil transport would silently drop them otherwise.
-        switch state {
-        // Nothing to send on. `reconnecting` is deliberately here: there is no
-        // socket during the backoff, and a keystroke queued against the one
-        // that replaces it would arrive at a prompt that has moved on.
-        case .idle, .closed, .reconnecting:
-            return
-        case .connecting, .attaching, .needsUnlock, .live:
+        // Geometry can change while the unlock keyboard is appearing. Remember
+        // it, but do not put RESIZE or keystrokes into the unlock exchange.
+        if case .resize(let cols, let rows) = frame {
+            self.cols = Int(cols)
+            self.rows = Int(rows)
+        }
+        switch (state, frame) {
+        case (.attaching, .attach):
             break
+        case (.needsUnlock, .unlock(let secret)):
+            unlockCandidate = secret
+        case (.live, .stdin), (.live, .resize), (.live, .ping), (.live, .detach), (.live, .kill):
+            break
+        default:
+            return
         }
         // The epoch this frame is going out on. A send completion is delivered
         // asynchronously and long after the socket it belonged to can have been
@@ -200,6 +211,8 @@ final class Connection {
     }
 
     func disconnect(sendDetach: Bool) {
+        unlockedSecret = nil
+        unlockCandidate = nil
         stopPinging()
         reconnectTimer?.invalidate()
         reconnectTimer = nil
@@ -224,6 +237,7 @@ final class Connection {
         transport?.cancel()
 
         epoch &+= 1
+        unlockCandidate = nil
         let myEpoch = epoch
 
         state = .connecting
@@ -273,6 +287,8 @@ final class Connection {
             onStdout?(data)
 
         case .attached(let resp):
+            unlockedSecret = unlockCandidate
+            unlockCandidate = nil
             resumeSessionID = resp.sessionID
             reconnectAttempts = 0
             // The one-shot fresh-attach downgrade is spent per *loss*, not per
@@ -284,9 +300,14 @@ final class Connection {
             everAttached = true
             lastPongAt = Date()
             state = .live(resp)
+            if cols != resp.cols || rows != resp.rows {
+                send(.resize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows)))
+            }
             startPinging()
 
         case .needUnlock(let attemptsLeft):
+            if unlockCandidate != nil { unlockedSecret = nil }
+            unlockCandidate = nil
             state = .needsUnlock(attemptsLeft: Int(attemptsLeft))
 
         case .exit(let code):
@@ -377,11 +398,7 @@ final class Connection {
             if let last = self.lastPongAt, Date().timeIntervalSince(last) > Self.pongTimeout {
                 // Not a courtesy DETACH: the point is that this socket is not
                 // carrying anything, so nothing would arrive.
-                self.transport?.onMessage = nil
-                self.transport?.cancel()
-                self.transport = nil
-                self.stopPinging()
-                self.scheduleReconnect(reason: "connection went quiet")
+                self.close(reason: "connection went quiet")
                 return
             }
 

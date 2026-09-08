@@ -41,7 +41,10 @@ struct SessionsView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
-        .refreshable { await load() }
+        .refreshable {
+            await api.forget(host: host.id)
+            await load()
+        }
     }
 
     private var annotation: String {
@@ -106,7 +109,12 @@ struct SessionsView: View {
                 .llProse(isError ? Theme.alertText : Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)
             if isError {
-                Button("RETRY") { Task { await load() } }
+                Button("RETRY") {
+                    Task {
+                        await api.forget(host: host.id)
+                        await load()
+                    }
+                }
                     .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
             }
             Spacer(minLength: 0)

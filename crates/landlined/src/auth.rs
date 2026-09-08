@@ -10,7 +10,8 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use rand::RngCore;
 
@@ -106,6 +107,7 @@ pub struct UnlockGate {
     /// PHC-format argon2id hash; empty means unlock is not required.
     hash: Arc<str>,
     state: Arc<Mutex<GateState>>,
+    admission: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl UnlockGate {
@@ -113,6 +115,7 @@ impl UnlockGate {
         UnlockGate {
             hash: unlock_hash.into(),
             state: Arc::new(Mutex::new(GateState::default())),
+            admission: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -151,6 +154,21 @@ impl UnlockGate {
         if !self.required() {
             return UnlockOutcome::Unlocked;
         }
+        // Finish admitted attempts even if the caller drops its request while
+        // Argon2 is running. Cancellation must not erase a guess from the budget.
+        let gate = self.clone();
+        tokio::spawn(async move { gate.verify_serialized(secret).await })
+            .await
+            .unwrap_or(UnlockOutcome::LockedOut)
+    }
+
+    async fn verify_serialized(&self, secret: String) -> UnlockOutcome {
+        // One admission gate for HTTP and WebSocket requests. Keep it through
+        // verification and backoff so queued callers recheck the updated state.
+        let _admission = self.admission.lock().await;
+        if self.locked_out() {
+            return UnlockOutcome::LockedOut;
+        }
         // Capped here rather than at each caller, so both doors agree. The HTTP
         // token endpoint has always refused a body over this; the WebSocket
         // UNLOCK frame would take up to a 1 MiB payload and hand the whole
@@ -159,10 +177,6 @@ impl UnlockGate {
         if secret.len() > MAX_SECRET_LEN {
             return self.record_failure().await;
         }
-        if self.locked_out() {
-            return UnlockOutcome::LockedOut;
-        }
-
         // Serve any backoff still owed from a previous wrong secret, before
         // spending CPU on this one.
         let owed = {
@@ -202,7 +216,7 @@ impl UnlockGate {
     async fn record_failure(&self) -> UnlockOutcome {
         let (failures, backoff) = {
             let mut state = self.state.lock().unwrap();
-            state.failures += 1;
+            state.failures = state.failures.saturating_add(1).min(MAX_UNLOCK_FAILURES);
             if state.failures >= MAX_UNLOCK_FAILURES {
                 state.locked_until = Some(Instant::now() + LOCKOUT);
             }
@@ -284,6 +298,54 @@ mod lockout_tests {
             gate.verify("correct-horse".to_string()).await,
             UnlockOutcome::Unlocked
         ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_attempts_share_one_budget() {
+        let gate = UnlockGate::new(hash_of("correct"));
+        let mut tasks = Vec::new();
+        for _ in 0..12 {
+            let gate = gate.clone();
+            tasks.push(tokio::spawn(
+                async move { gate.verify("wrong".into()).await },
+            ));
+        }
+        let mut wrong = 0;
+        let mut locked = 0;
+        for task in tasks {
+            match task.await.unwrap() {
+                UnlockOutcome::Wrong { .. } => wrong += 1,
+                UnlockOutcome::LockedOut => locked += 1,
+                UnlockOutcome::Unlocked => panic!("wrong secret unlocked"),
+            }
+        }
+        assert_eq!(wrong, 9);
+        assert_eq!(locked, 3);
+        assert_eq!(gate.state.lock().unwrap().failures, MAX_UNLOCK_FAILURES);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_queued_correct_secret_cannot_reset_a_new_lockout() {
+        let gate = UnlockGate::new(hash_of("correct"));
+        gate.state.lock().unwrap().failures = MAX_UNLOCK_FAILURES - 1;
+        let (wrong, correct) =
+            tokio::join!(gate.verify("wrong".into()), gate.verify("correct".into()),);
+        assert!(matches!(wrong, UnlockOutcome::LockedOut));
+        assert!(matches!(correct, UnlockOutcome::LockedOut));
+        assert!(gate.locked_out());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn oversized_attempts_cannot_overflow_a_locked_gate() {
+        let gate = UnlockGate::new(hash_of("correct"));
+        gate.state.lock().unwrap().failures = MAX_UNLOCK_FAILURES - 1;
+        for _ in 0..70 {
+            assert!(matches!(
+                gate.verify("x".repeat(MAX_SECRET_LEN + 1)).await,
+                UnlockOutcome::LockedOut
+            ));
+        }
+        assert_eq!(gate.state.lock().unwrap().failures, MAX_UNLOCK_FAILURES);
     }
 
     #[tokio::test]

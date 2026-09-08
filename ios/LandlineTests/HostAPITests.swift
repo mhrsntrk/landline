@@ -158,6 +158,51 @@ final class HostAPITests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.mintCount, 1, "the second call reuses the grant")
     }
 
+    func testBackgroundCallsDoNotRepeatARejectedSecret() async throws {
+        StubURLProtocol.reset([
+            .init(401, #"{"error":"bad_secret","attempts_left":9}"#),
+            .init(200, Self.goodToken), .init(200, "[]"),
+        ])
+        for _ in 0..<12 {
+            do {
+                _ = try await api.outbox(on: host, secret: "stale")
+                XCTFail("expected cached refusal")
+            } catch {
+                XCTAssertEqual(error as? UploadError, .badSecret(attemptsLeft: 9))
+            }
+        }
+        XCTAssertEqual(StubURLProtocol.mintCount, 1)
+        _ = try await api.outbox(on: host, secret: "manually-verified")
+        XCTAssertEqual(StubURLProtocol.mintCount, 2)
+        XCTAssertEqual(StubURLProtocol.requests[1].body, "manually-verified")
+    }
+
+    func testLockoutRequiresAnExplicitResetBeforeRetrying() async throws {
+        StubURLProtocol.reset([
+            .init(429, #"{"error":"locked_out"}"#),
+            .init(200, Self.goodToken), .init(200, "[]"),
+        ])
+        for _ in 0..<3 { _ = try? await api.outbox(on: host, secret: "correct") }
+        XCTAssertEqual(StubURLProtocol.mintCount, 1)
+        await api.forget(host: host.id)
+        _ = try await api.outbox(on: host, secret: "correct")
+        XCTAssertEqual(StubURLProtocol.mintCount, 2)
+    }
+
+    func testOfferDownloadRetriesAnExpiredTokenAndWritesAFile() async throws {
+        StubURLProtocol.reset([
+            .init(200, Self.goodToken), .init(401, "expired"),
+            .init(200, Self.goodToken), .init(200, "downloaded bytes"),
+        ])
+        let offer = HostOffer(id: UUID().uuidString, name: "report.txt", bytes: 16, offeredAt: 0)
+        let url = try await api.fetchOffer(offer, on: host, secret: "correct")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "downloaded bytes")
+        XCTAssertEqual(url.lastPathComponent, "report.txt")
+        XCTAssertEqual(StubURLProtocol.mintCount, 2)
+        XCTAssertEqual(StubURLProtocol.requests.last?.auth, "Bearer abc")
+    }
+
     // MARK: Refusals a person can act on
 
     func testAnUnauthorizedLoginIsReportedNotRetried() async {
