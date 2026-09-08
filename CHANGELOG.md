@@ -7,7 +7,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Every key in the bar can choose its own face: a label of up to four characters, or one of thirty
+  Nerd Font icons drawn in the bundled terminal face. Catalog keys are editable too, where before
+  only a custom key opened anything.
+
+### Changed
+
+- Reordering the key bar is a long-press drag and nothing else. The per-row up and down buttons are
+  gone, and the annotation under the title says the row can be held.
+- The attach key's drawn page mark is retired in favour of the icon mechanism every key now shares.
 
 ## [0.2.0] - 2026-09-08
 
