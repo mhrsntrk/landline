@@ -111,10 +111,13 @@ enum PathInsertion {
     static func bytes(for path: String, bracketedPaste: Bool) -> [UInt8] {
         let body = Array(path.utf8).filter { $0 >= 0x20 && $0 != 0x7f }
         guard !body.isEmpty else { return [] }
-        let payload = body + [UInt8(0x20)]
-        guard bracketedPaste else { return payload }
+        guard bracketedPaste else { return body + [UInt8(0x20)] }
         let start: [UInt8] = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e] // ESC [ 200 ~
         let end: [UInt8] = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]   // ESC [ 201 ~
-        return start + payload + end
+        // The separator sits *outside* the wrapper. Inside, it is part of the
+        // pasted text: highlighted as pasted content, and counted into whatever
+        // the receiver treats as the pasted unit. `Snippet.bytes` already keeps
+        // its trailing return outside for the same reason.
+        return start + body + end + [UInt8(0x20)]
     }
 }

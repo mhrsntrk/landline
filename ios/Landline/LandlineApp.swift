@@ -14,6 +14,11 @@ struct LandlineApp: App {
             RootView()
                 .environment(hostStore)
                 .environment(settingsStore)
+                // Files fetched out of a host's outbox land in `tmp` and were
+                // never cleaned. What a machine pushes is often the sensitive
+                // end of what it holds, so they do not get to sit there until
+                // iOS feels like reclaiming the space.
+                .task { HostAPI.sweepFetchedOffers() }
         }
     }
 }

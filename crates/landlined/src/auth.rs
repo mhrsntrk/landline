@@ -23,9 +23,12 @@ use crate::config::Config;
 /// Header carrying the authenticated tailnet login on the upgrade request.
 pub const LOGIN_HEADER: &str = "Tailscale-User-Login";
 
-/// After this many wrong unlock secrets the daemon refuses every further
-/// attempt until it is restarted.
+/// After this many wrong unlock secrets the gate shuts for [`LOCKOUT`], then
+/// reopens with a fresh budget.
 pub const MAX_UNLOCK_FAILURES: u32 = 10;
+
+/// Longest secret this will hash. See the note in [`UnlockGate::verify`].
+pub const MAX_SECRET_LEN: usize = 1024;
 
 /// Resolves and authorizes the client identity from the upgrade request
 /// headers. Returns the login on success; `None` means the caller must
@@ -87,6 +90,15 @@ pub const LOCKOUT: Duration = Duration::from_secs(15 * 60);
 struct GateState {
     failures: u32,
     locked_until: Option<Instant>,
+    /// Earliest instant the next attempt may be *verified*.
+    ///
+    /// The backoff used to be a sleep before the reply, which a caller who
+    /// hung up (or who opened ten connections at once, or who used the HTTP
+    /// token endpoint) never waited out: every attempt reached argon2
+    /// immediately and only the failure budget limited the guessing. Holding
+    /// the deadline on the gate makes the wait apply to the attempt instead of
+    /// to the answer, so it cannot be skipped by dropping the connection.
+    not_before: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -139,8 +151,28 @@ impl UnlockGate {
         if !self.required() {
             return UnlockOutcome::Unlocked;
         }
+        // Capped here rather than at each caller, so both doors agree. The HTTP
+        // token endpoint has always refused a body over this; the WebSocket
+        // UNLOCK frame would take up to a 1 MiB payload and hand the whole
+        // thing to argon2. Nobody's secret is a kilobyte, and a wrong one is a
+        // wrong one however long it is.
+        if secret.len() > MAX_SECRET_LEN {
+            return self.record_failure().await;
+        }
         if self.locked_out() {
             return UnlockOutcome::LockedOut;
+        }
+
+        // Serve any backoff still owed from a previous wrong secret, before
+        // spending CPU on this one.
+        let owed = {
+            let state = self.state.lock().unwrap();
+            state
+                .not_before
+                .and_then(|at| at.checked_duration_since(Instant::now()))
+        };
+        if let Some(delay) = owed {
+            tokio::time::sleep(delay).await;
         }
 
         // Argon2 verification is CPU-heavy by design; keep it off the
@@ -163,18 +195,28 @@ impl UnlockGate {
             return UnlockOutcome::Unlocked;
         }
 
-        let failures = {
+        self.record_failure().await
+    }
+
+    /// Counts one wrong secret, serves its backoff, and reports what is left.
+    async fn record_failure(&self) -> UnlockOutcome {
+        let (failures, backoff) = {
             let mut state = self.state.lock().unwrap();
             state.failures += 1;
             if state.failures >= MAX_UNLOCK_FAILURES {
                 state.locked_until = Some(Instant::now() + LOCKOUT);
             }
-            state.failures
+            let backoff = Duration::from_millis((500u64 << state.failures).min(60_000));
+            // Recorded before the sleep, so a caller who hangs up mid-wait
+            // still owes it on the next attempt.
+            state.not_before = Some(Instant::now() + backoff);
+            (state.failures, backoff)
         };
         if failures >= MAX_UNLOCK_FAILURES {
             return UnlockOutcome::LockedOut;
         }
-        let backoff = Duration::from_millis((500u64 << failures).min(60_000));
+        // Still slept here as well, so a caller that waits for its answer sees
+        // the delay rather than a fast refusal it could retry in a tight loop.
         tokio::time::sleep(backoff).await;
         UnlockOutcome::Wrong {
             attempts_left: MAX_UNLOCK_FAILURES - failures,

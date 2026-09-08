@@ -258,7 +258,7 @@ async fn close_with(socket: &mut WebSocket, code: u16, reason: &'static str) {
 fn locked_out_err() -> ServerFrame {
     ServerFrame::Err {
         code: ErrCode::LockedOut,
-        message: "too many failed unlock attempts; restart the daemon".to_string(),
+        message: "too many failed unlock attempts; try again in 15 minutes".to_string(),
     }
 }
 
@@ -1061,6 +1061,71 @@ mod tests {
         )
         .await;
         assert_eq!(malformed.status, 400, "{}", malformed.body);
+    }
+
+    /// PROTOCOL.md step 4: a second attach to a live session evicts the first
+    /// with SESSION_REPLACED. The generation counter exists so the evicted
+    /// connection's teardown cannot then detach the one that replaced it, which
+    /// is a hazard neither half of was exercised.
+    #[tokio::test]
+    async fn a_second_attach_evicts_the_first_without_detaching_itself() {
+        let addr = start(test_config()).await;
+
+        let mut first = connect(addr, Some(LOGIN)).await.expect("connect");
+        send(&mut first, attach_req(None)).await;
+        let ServerFrame::Attached(resp) = recv(&mut first).await else {
+            panic!("expected ATTACHED");
+        };
+        let session_id = resp.session_id.clone();
+
+        // Second client resumes the same session.
+        let mut second = connect(addr, Some(LOGIN)).await.expect("connect");
+        send(&mut second, attach_req(Some(session_id.clone()))).await;
+        let ServerFrame::Attached(second_resp) = recv(&mut second).await else {
+            panic!("expected ATTACHED on the second client");
+        };
+        assert_eq!(
+            second_resp.session_id, session_id,
+            "same session, not a new one"
+        );
+
+        // The first is told why it is going, rather than just dropped. Its own
+        // attach replay is still in flight, so skip past it.
+        let mut evicted = None;
+        for _ in 0..20 {
+            match recv(&mut first).await {
+                ServerFrame::Stdout(_) => continue,
+                ServerFrame::Err { code, .. } => {
+                    evicted = Some(code);
+                    break;
+                }
+                other => panic!("expected SESSION_REPLACED, got {other:?}"),
+            }
+        }
+        assert_eq!(evicted, Some(ErrCode::SessionReplaced));
+
+        // Now let the evicted connection finish tearing down, and prove the
+        // survivor is still attached afterwards: the generation guard is what
+        // stops the dead client's detach from clearing the live client's slot.
+        drop(first);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let token = mint_token(addr, "").await;
+        let listed = http(addr, "GET", "/v1/sessions", Some(LOGIN), Some(&token), b"").await;
+        assert!(
+            listed.body.contains("\"attached\":true"),
+            "the surviving client must still be attached: {}",
+            listed.body
+        );
+
+        // And it still works: the shell answers.
+        send(
+            &mut second,
+            ClientFrame::Stdin(Bytes::from_static(b"echo alive\n")),
+        )
+        .await;
+        let output = collect_stdout_until(&mut second, "alive").await;
+        assert!(output.contains("alive"), "{output}");
     }
 
     #[tokio::test]

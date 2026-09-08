@@ -147,7 +147,19 @@ struct TerminalScreen: View {
             // terminal has to be what a keystroke reaches.
             DispatchQueue.main.async { controller.focus() }
         }
-        .onDisappear { connection.disconnect(sendDetach: true) }
+        .onDisappear {
+            connection.disconnect(sendDetach: true)
+            // Both objects are stored in `@State` on this view *and* hold
+            // closures that captured it, so each retains itself through its own
+            // callback and neither deinit ever runs. Clearing them here is what
+            // actually releases the pair when the screen goes away.
+            connection.onState = nil
+            connection.onStdout = nil
+            connection.onSessionInvalidated = nil
+            controller.onSend = nil
+            controller.onResize = nil
+            controller.onFontSizeChange = nil
+        }
         // A font or palette edit must reach the terminal the moment it is
         // saved, not on the next foregrounding.
         .onChange(of: fontFamily) { _, _ in applyFont() }
@@ -179,6 +191,10 @@ struct TerminalScreen: View {
                 controller.focus()
                 if case .closed = state { reconnect() }
                 if case .idle = state { reconnect() }
+                // Coming back to the app is the clearest signal that whatever
+                // the link was waiting out is over, so it should not sit
+                // through the rest of a backoff the user cannot see.
+                if case .reconnecting = state { connection.retryNow() }
                 if isLive { Task { await refreshOffers() } }
             default:
                 break
@@ -507,6 +523,32 @@ struct TerminalScreen: View {
         case none
         case sending(name: String, bytes: Int)
         case failed(String)
+        /// The file reached the host but the path could not be typed, because
+        /// the session dropped in between. The upload is not the thing that
+        /// went wrong, and saying "UPLOAD FAILED" would send someone looking
+        /// for a file that is already there.
+        case strandedAt(String)
+        /// A fetch from the host's outbox failed. Its own case because the
+        /// upload wording is wrong in both halves for a download.
+        case fetchFailed(String)
+
+        var label: String {
+            switch self {
+            case .none, .sending: return ""
+            case .failed: return "UPLOAD FAILED"
+            case .strandedAt: return "UPLOADED, NOT TYPED"
+            case .fetchFailed: return "COULD NOT OPEN"
+            }
+        }
+
+        var message: String? {
+            switch self {
+            case .none, .sending: return nil
+            case .failed(let text), .fetchFailed(let text): return text
+            case .strandedAt(let path):
+                return "The file is on the host at \(path), but the session dropped before the path could be typed."
+            }
+        }
     }
 
     @ViewBuilder
@@ -526,21 +568,33 @@ struct TerminalScreen: View {
                     MicroLabel(Self.sizeLabel(bytes))
                 }
             }
-        case .failed(let reason):
+        case .failed, .fetchFailed, .strandedAt:
             band {
                 VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
                     HStack(spacing: Theme.Metric.grid * 3) {
-                        MicroLabel("UPLOAD FAILED", color: Theme.alert)
+                        // A stranded upload is not an error: the file arrived.
+                        // It reads in `warn` so it does not send anyone hunting
+                        // for a failure that did not happen.
+                        MicroLabel(upload.label,
+                                   color: isStranded ? Theme.warn : Theme.alert)
                         Spacer(minLength: 0)
                         Button("DISMISS") { upload = .none }
                             .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
                     }
-                    Text(reason)
-                        .llValue(Theme.alertText)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if let message = upload.message {
+                        Text(message)
+                            .llValue(isStranded ? Theme.ink : Theme.alertText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
                 }
             }
         }
+    }
+
+    private var isStranded: Bool {
+        if case .strandedAt = upload { return true }
+        return false
     }
 
     /// Bytes as the band prints them: whole units, never more than four glyphs
@@ -552,6 +606,7 @@ struct TerminalScreen: View {
         return "\(max(1, Int((Double(bytes) / 1024).rounded()))) KB"
     }
 
+    @MainActor
     private func loadPhoto(_ item: PhotosPickerItem) async {
         let type = item.supportedContentTypes.first
         guard let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty else {
@@ -572,13 +627,31 @@ struct TerminalScreen: View {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+        // Asked before reading. The picker allows any item, so this could be a
+        // multi-gigabyte video or a file iCloud has not downloaded, and
+        // `Data(contentsOf:)` on one of those blocks the main thread long
+        // enough to be killed, well before the host's own size cap is ever
+        // consulted.
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+        if let size, size > Self.pickedFileCeiling {
+            upload = .failed("that file is \(Self.sizeLabel(size)), larger than a host will take")
+            return
+        }
+
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), !data.isEmpty else {
             upload = .failed("could not read that file")
             return
         }
         let type = UTType(filenameExtension: url.pathExtension)
         send(AttachmentPrep.prepare(data: data, filename: url.lastPathComponent, type: type))
     }
+
+    /// The largest file worth reading into memory before asking the host.
+    ///
+    /// Matches the daemon's own default `upload_max_bytes`. A host may be
+    /// configured lower, and will say so; this exists only to stop the app
+    /// dying before it can be told.
+    private static let pickedFileCeiling = 26_214_400
 
     private func send(_ attachment: Attachment) {
         upload = .sending(name: attachment.filename, bytes: attachment.data.count)
@@ -595,8 +668,17 @@ struct TerminalScreen: View {
                     secret: secret
                 )
                 await MainActor.run {
-                    upload = .none
-                    insert(path: path)
+                    // Only clear the band if the path can actually be typed.
+                    // `Connection.send` drops frames while reconnecting, and a
+                    // long upload over a flaky link is exactly when that
+                    // happens: the file lands, the receipt never appears, and
+                    // without this the whole thing vanishes silently.
+                    if isLive {
+                        upload = .none
+                        insert(path: path)
+                    } else {
+                        upload = .strandedAt(path)
+                    }
                 }
             } catch {
                 let message = (error as? UploadError)?.message ?? error.localizedDescription
@@ -663,6 +745,7 @@ struct TerminalScreen: View {
     /// typing `landlined send` before looking at the phone, and the request is
     /// a few dozen bytes of JSON over a link that is already carrying a
     /// terminal.
+    @MainActor
     private func pollOffers() async {
         guard isLive else { return }
         await refreshOffers()
@@ -673,6 +756,7 @@ struct TerminalScreen: View {
         }
     }
 
+    @MainActor
     private func refreshOffers() async {
         let target = liveHost
         let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
@@ -682,6 +766,7 @@ struct TerminalScreen: View {
         offers = (try? await api.outbox(on: target, secret: secret)) ?? []
     }
 
+    @MainActor
     private func fetch(_ offer: HostOffer) async {
         fetchingOffer = true
         defer { fetchingOffer = false }
@@ -699,6 +784,7 @@ struct TerminalScreen: View {
         }
     }
 
+    @MainActor
     private func withdraw(_ offer: HostOffer) async {
         let target = liveHost
         let secret = Keychain.unlockSecret(hostID: target.id) ?? ""
@@ -933,7 +1019,16 @@ struct TerminalScreen: View {
             break
 
         case .connecting, .attaching:
-            break
+            // Every new transport re-unlocks (PROTOCOL.md 3), so the
+            // "already tried the Keychain" flag is per *connection*, not per
+            // screen. Resetting it only in `reconnect()` meant the paths that
+            // reconnect inside `Connection` (the backoff after a dropped link,
+            // the fresh attach after SESSION_GONE, the RETRY NOW button) came
+            // back up with the flag still set and fell straight through to the
+            // manual prompt, which is the one thing an automatic reconnect is
+            // supposed to spare you.
+            triedKeychainSecret = false
+
         }
     }
 

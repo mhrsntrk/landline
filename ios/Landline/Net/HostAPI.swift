@@ -119,14 +119,46 @@ actor HostAPI {
     func fetchOffer(_ offer: HostOffer, on host: Host, secret: String) async throws -> URL {
         let body = try await send(method: "GET", path: "/v1/outbox/\(offer.id)",
                                   host: host, secret: secret)
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("landline-offers", isDirectory: true)
+        let directory = HostAPI.offersDirectory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         // Named as the host named it, so the share sheet and QuickLook show the
-        // file someone actually sent rather than a hex id.
-        let url = directory.appendingPathComponent(HostAPI.pathSegment(for: offer.name))
+        // file someone actually sent rather than a hex id. The offer id goes in
+        // its own subdirectory rather than into the name: two offers called
+        // `report.pdf` must not overwrite each other, and a QuickLook still
+        // open on the first must not silently start showing the second.
+        let slot = directory.appendingPathComponent(offer.id, isDirectory: true)
+        try? FileManager.default.createDirectory(at: slot, withIntermediateDirectories: true)
+        let url = slot.appendingPathComponent(HostAPI.pathSegment(for: offer.name))
         try body.write(to: url, options: .atomic)
         return url
+    }
+
+    /// Where fetched offers land.
+    static var offersDirectory: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("landline-offers", isDirectory: true)
+    }
+
+    /// Deletes fetched offers older than a day.
+    ///
+    /// What a host pushes is routinely the sensitive end of what it holds, and
+    /// iOS purges `tmp` on its own unhurried schedule. Nothing here was ever
+    /// deleted, so a log or a report fetched once stayed on the phone
+    /// indefinitely.
+    static func sweepFetchedOffers(olderThan age: TimeInterval = 86_400) {
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(
+            at: offersDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let cutoff = Date().addingTimeInterval(-age)
+        for entry in entries {
+            let modified = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            if let modified, modified > cutoff { continue }
+            try? manager.removeItem(at: entry)
+        }
     }
 
     /// Withdraws an offer. The host's own copy is untouched.
