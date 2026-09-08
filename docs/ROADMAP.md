@@ -50,10 +50,20 @@ ship independently and version skew is the normal case.
 landed at, which the app types into the running session. Same listener, same serve mapping, same
 login allowlist and unlock secret as the shell. Streamed and capped, name and destination chosen by
 the daemon rather than the caller, never overwriting, swept after a TTL. Specified in
-`docs/FILES.md`. In the app it is one key in the bar, `FILE`, and the picker behind it.
+`docs/HTTP.md`. In the app it is one key in the bar, `FILE`, and the picker behind it.
 
 Not a step towards a file browser: there is no read endpoint and no listing, and there will not be
 one.
+
+**Sessions, snippets, and files both ways.** `GET /v1/sessions` and `DELETE /v1/sessions/{id}`
+put the session list on the phone, with resume and kill. `landlined send <path>` offers a file the
+other way, fetched by id so no request ever names a path. Snippets are saved text the key bar can
+type, because the phone keyboard is the bottleneck this app cannot fix. All specified in
+`docs/HTTP.md`.
+
+**Keepalive that means something.** PONG used to be received and discarded, so a half-open socket
+read as LIVE indefinitely. Two missed pings now drop it and reattach with backoff, and because the
+session lives on the daemon that is a resume rather than a new shell.
 
 **CLI test client (`landline-cli`).** A real terminal client for the daemon: attach or resume, raw
 mode, bytes both ways. It exists so the host side can be developed and debugged without an iPhone
@@ -74,21 +84,13 @@ warnings denied, and the test suite on Ubuntu, macOS, and Windows on every push.
 over cellular, through `tailscale serve`, and confirming that vim is genuinely usable. Everything
 below is gated on what that surfaces.
 
-**Resilience.** The part that decides whether this is pleasant or infuriating:
+**Resilience.** What is left of it:
 
-- Session list per host in the app, with resume, kill, and session age.
 - Background detach and foreground resume, polished. iOS background socket termination is the
   classic source of leaked sessions and phantom disconnects.
-- Ping/pong keepalive with dead-peer detection on both sides.
-- Reconnect with exponential backoff on transport failure.
+- Dead-peer detection on the *daemon* side. The app now notices a peer that stopped answering; the
+  daemon still waits for the reaper.
 - Honest measurement of how often replay artifacts actually show up.
-
-**Snippets.** Saved commands, tap to insert. Cheap to build and disproportionately useful when the
-keyboard is a phone.
-
-**Onboarding.** A flow that takes someone from installing the app to a first working shell,
-including getting `landlined` running on their own machine. The app is useless without a daemon
-somewhere, and that has to be obvious before install, not after.
 
 **App Store release.** Listing, screenshots, privacy labels, export compliance. A Debian package
 alongside the existing Homebrew formula and install script.

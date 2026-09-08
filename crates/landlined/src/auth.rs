@@ -8,8 +8,11 @@
 //! protocol handshake (NEED_UNLOCK / UNLOCK frames), argon2id-verified
 //! against `Config::unlock_hash`.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use rand::RngCore;
 
 use argon2::password_hash::PasswordHash;
 use argon2::{Argon2, PasswordVerifier};
@@ -180,6 +183,35 @@ impl UnlockGate {
 }
 
 #[cfg(test)]
+mod token_tests {
+    use super::*;
+
+    #[test]
+    fn tokens_are_bound_to_the_login_that_minted_them() {
+        let store = TokenStore::new();
+        let token = store.issue("alice@example.com");
+        assert!(store.check(&token, "alice@example.com"));
+        assert!(!store.check(&token, "bob@example.com"));
+        assert!(!store.check("not-a-token", "alice@example.com"));
+    }
+
+    #[test]
+    fn the_token_map_stays_bounded() {
+        let store = TokenStore::new();
+        let first = store.issue("alice@example.com");
+        for _ in 0..MAX_LIVE_TOKENS * 2 {
+            let token = store.issue("alice@example.com");
+            assert!(store.check(&token, "alice@example.com"));
+        }
+        assert!(
+            store.grants.lock().unwrap().len() <= MAX_LIVE_TOKENS,
+            "the map must not grow without bound"
+        );
+        assert!(!store.check(&first, "alice@example.com"));
+    }
+}
+
+#[cfg(test)]
 mod lockout_tests {
     use super::*;
 
@@ -226,4 +258,91 @@ mod lockout_tests {
             UnlockOutcome::LockedOut
         ));
     }
+}
+
+/// How long an issued API token stays valid.
+///
+/// Short because it only has to outlive a picker and a request, and a token is
+/// held in the app's memory rather than in its Keychain: a foregrounded app
+/// that needs another one can always ask, since it holds the secret that mints
+/// them.
+pub const TOKEN_TTL: Duration = Duration::from_secs(600);
+
+/// Live tokens kept at once. One phone needs one; the cap exists so a caller
+/// that mints in a loop cannot grow the map without bound.
+const MAX_LIVE_TOKENS: usize = 32;
+
+// ---- API tokens ----
+//
+// The bearer tokens the HTTP endpoints (`docs/HTTP.md`) spend. They live here
+// rather than beside any one of those endpoints because all three families
+// take the same one: it is an authentication concern, not a file one.
+
+struct Grant {
+    login: String,
+    expires: Instant,
+}
+
+/// Bearer tokens minted by `POST /v1/token` and spent on every other HTTP
+/// endpoint.
+///
+/// In memory only: a daemon restart invalidates every token, which is correct.
+/// There is nothing to persist and nothing on disk to leak.
+#[derive(Clone, Default)]
+pub struct TokenStore {
+    grants: Arc<Mutex<HashMap<String, Grant>>>,
+}
+
+impl TokenStore {
+    pub fn new() -> Self {
+        TokenStore::default()
+    }
+
+    /// Mints a token bound to `login`, valid for [`TOKEN_TTL`].
+    pub fn issue(&self, login: &str) -> String {
+        let token = random_hex(32);
+        let mut grants = self.grants.lock().unwrap();
+        let now = Instant::now();
+        grants.retain(|_, grant| grant.expires > now);
+        // Still full after pruning: drop whichever grant dies soonest, so a
+        // token that was just minted is never the one evicted.
+        while grants.len() >= MAX_LIVE_TOKENS {
+            let Some(oldest) = grants
+                .iter()
+                .min_by_key(|(_, grant)| grant.expires)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            grants.remove(&oldest);
+        }
+        grants.insert(
+            token.clone(),
+            Grant {
+                login: login.to_string(),
+                expires: now + TOKEN_TTL,
+            },
+        );
+        token
+    }
+
+    /// True when `token` is live and was minted for `login`.
+    ///
+    /// The lookup is not constant time and does not need to be: a token is 256
+    /// bits from the OS CSPRNG, so there is no guess close enough for a timing
+    /// difference to steer.
+    pub fn check(&self, token: &str, login: &str) -> bool {
+        let mut grants = self.grants.lock().unwrap();
+        let now = Instant::now();
+        grants.retain(|_, grant| grant.expires > now);
+        grants.get(token).is_some_and(|grant| grant.login == login)
+    }
+}
+
+/// `bytes` bytes from the OS CSPRNG, hex encoded. Shared with the file inbox,
+/// which uses it for the suffix that makes an upload name unique.
+pub fn random_hex(bytes: usize) -> String {
+    let mut buf = vec![0u8; bytes];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    buf.iter().map(|byte| format!("{byte:02x}")).collect()
 }

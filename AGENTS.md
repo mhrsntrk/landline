@@ -8,14 +8,14 @@ Also read as `CLAUDE.md`; the file is symlinked so both conventions find it.
 ## Commands
 
 ```sh
-cargo test --workspace                                   # 90 tests
+cargo test --workspace                                   # 99 tests
 cargo clippy --workspace --all-targets -- -D warnings     # must be silent
 cargo fmt --all
 
 cd ios && xcodegen generate                               # the .xcodeproj is generated, never edited
 xcodebuild -project Landline.xcodeproj -scheme Landline \
   -destination 'generic/platform=iOS Simulator' \
-  -skipPackagePluginValidation build                      # 235 tests via `test`
+  -skipPackagePluginValidation build                      # 264 tests via `test`
 ```
 
 `-skipPackagePluginValidation` is required: SwiftTerm ships a build-tool plugin
@@ -65,6 +65,13 @@ Each of these cost real time. They are listed because they will recur.
   whole session and would occupy pool slots forever.
 - **Terminal output fan-out uses a swappable mpsc slot, never `broadcast`.** A
   lagging broadcast receiver drops messages silently, which corrupts a stream.
+- **Dead code is per platform, and CI denies warnings.** The admin socket is Unix-only, so
+  anything only it calls (`Outbox::offer`) has no caller on Windows and fails the build there
+  under `-D warnings`, having compiled cleanly on the machine it was written on. Reach for
+  `#[cfg_attr(not(unix), allow(dead_code))]` rather than deleting the thing.
+- **Do not assert on a kill you did not wait for.** `SessionManager::kill` terminates the child;
+  the session leaves the registry when the pump observes the exit. A test that kills and then
+  asserts the id is gone passes on a fast machine and fails in CI.
 - **Homebrew needs a bottle.** A formula without one is treated as a source
   build, and Homebrew then refuses on any machine with outdated Command Line
   Tools, even though `install` only copies a compiled binary.
@@ -77,7 +84,7 @@ Screen sharing or remote desktop. A file manager or SFTP browser. Port
 forwarding. Android or web clients. A hosted service, accounts, or telemetry of
 any kind.
 
-The file inbox (`docs/FILES.md`) is not an exception to that second one and must
+The file inbox (`docs/HTTP.md`) is not an exception to that second one and must
 not grow into it: one file, phone to host, one path handed back. No read
 endpoint, no directory listing, no caller-chosen destination.
 

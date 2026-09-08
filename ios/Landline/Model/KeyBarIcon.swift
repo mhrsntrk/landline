@@ -98,4 +98,7 @@ struct KeyBarIcon: Identifiable, Hashable {
     /// The file key wears one by default, because it is the one key in the bar
     /// that is not a key a keyboard has and so has no word that reads right.
     static let attachDefault = KeyBarIcon(0xF15B, "file").scalar
+
+    /// So does the snippet key, for the same reason.
+    static let snippetDefault = KeyBarIcon(0xF0EA, "paste").scalar
 }

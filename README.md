@@ -132,7 +132,19 @@ one-command answer.
   photo or a file, puts it in an inbox directory on that host, and types the path it landed at into
   the session. Whatever is running there, a shell, an editor, or a coding agent, then has a real
   path to a real file. HEIC becomes JPEG on the way, since most things on the far end cannot open
-  one. See [docs/FILES.md](docs/FILES.md); it is one file in one direction, not a file browser.
+  one. See [docs/HTTP.md](docs/HTTP.md); it is one file in one direction, not a file browser.
+- **Snippets.** Saved text, tap to type. The phone keyboard is the bottleneck this app cannot fix,
+  and a long command or an agent prompt is the thing it is worst at. Pasted as one paste, and never
+  run unless the snippet says to.
+- **A session list per host.** What is running on that machine, how long it has been idle, and the
+  two things worth doing about it: resume, or kill. Previously only a process on the host could ask,
+  which is the machine you are not sitting at when it matters.
+- **Files back from the host.** `landlined send report.pdf` offers a file; the phone shows a band
+  and opens it. The path never leaves the host: an offer is created by a local process and fetched
+  by an id, so this is a hand-off and not a remote filesystem.
+- **It reconnects.** Ping and pong both matter now: a socket that stops answering is dropped and
+  reattached with backoff, which is the failure a phone actually has when it crosses between
+  cellular and wifi. The session lives on the daemon, so a reconnect resumes it.
 - **`landline-cli`**, a raw-mode terminal test client that speaks the same protocol, for testing a
   host without a phone in your hand.
 
@@ -206,6 +218,7 @@ The config file is written with mode `0600` on Unix.
 | `landlined doctor` | Full diagnosis: tailscale, backend, MagicDNS, serve mapping, listener, admin socket, allowlist, file inbox, app url. |
 | `landlined sessions list` | List live and detached sessions. |
 | `landlined sessions kill <id>` | Terminate one session. |
+| `landlined send <path>` | Offer a file to the phone. Registers the path; the app fetches it and the file is never moved or deleted. |
 | `landlined config-path` | Print the config file path. |
 | `landlined set-unlock [--clear]` | Prompt for an unlock secret and argon2id hash it into the config, or clear it. |
 
@@ -278,7 +291,7 @@ the failure modes that are easy to misdiagnose.
 
 - [docs/SCOPE.md](docs/SCOPE.md): what this is, non-goals, architecture, security model, session design.
 - [docs/PROTOCOL.md](docs/PROTOCOL.md): wire protocol version 1, normative.
-- [docs/FILES.md](docs/FILES.md): the file inbox HTTP endpoints, normative.
+- [docs/HTTP.md](docs/HTTP.md): the HTTP endpoints beside the shell, normative.
 - [docs/ROADMAP.md](docs/ROADMAP.md): what is next.
 - [SECURITY.md](SECURITY.md): reporting a vulnerability.
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to build, test and submit changes.

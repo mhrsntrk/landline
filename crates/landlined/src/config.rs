@@ -36,7 +36,7 @@ pub struct Config {
     /// required.
     pub unlock_hash: String,
     /// Whether the file inbox (`POST /v1/token`, `PUT /v1/files/{name}`) is
-    /// served. See `docs/FILES.md`.
+    /// served. See `docs/HTTP.md`.
     ///
     /// On by default, unlike every other decision in this file, and the reason
     /// is that it is not a new grant: the inbox sits behind the same tailnet

@@ -220,28 +220,47 @@ final class SettingsStore {
         save()
     }
 
-    /// One step along the row. The buttons exist because which keys sit under
-    /// the thumb is the whole point of this screen, and a one-handed nudge has
-    /// to work without a drag gesture.
-    func nudge(id: UUID, by delta: Int) {
-        guard let index = settings.keyBar.firstIndex(where: { $0.id == id }) else { return }
-        let target = index + delta
-        guard settings.keyBar.indices.contains(target) else { return }
-        settings.keyBar.swapAt(index, target)
-        save()
-    }
-
     func resetKeyBar() {
         // Fresh ids: the identity of a slot is the slot, not the key in it.
         settings.keyBar = KeyBarKey.defaultLayout.map {
-            KeyBarKey(catalogID: $0.catalogID, label: $0.label, sequence: $0.sequence)
+            KeyBarKey(catalogID: $0.catalogID, label: $0.label,
+                      sequence: $0.sequence, icon: $0.icon)
         }
         save()
     }
 
     var isDefaultKeyBar: Bool {
-        settings.keyBar.map { [$0.catalogID, $0.label, $0.sequence] }
-            == KeyBarKey.defaultLayout.map { [$0.catalogID, $0.label, $0.sequence] }
+        settings.keyBar.map { [$0.catalogID, $0.label, $0.sequence, $0.icon] }
+            == KeyBarKey.defaultLayout.map { [$0.catalogID, $0.label, $0.sequence, $0.icon] }
+    }
+
+    // MARK: - Snippets
+
+    var snippets: [Snippet] { settings.snippets }
+
+    func appendSnippet(_ snippet: Snippet) {
+        settings.snippets.append(snippet)
+        save()
+    }
+
+    func replaceSnippet(_ snippet: Snippet) {
+        guard let index = settings.snippets.firstIndex(where: { $0.id == snippet.id }) else { return }
+        settings.snippets[index] = snippet
+        save()
+    }
+
+    func removeSnippet(id: UUID) {
+        settings.snippets.removeAll { $0.id == id }
+        save()
+    }
+
+    func snippet(id: UUID) -> Snippet? {
+        settings.snippets.first { $0.id == id }
+    }
+
+    func moveSnippets(fromOffsets source: IndexSet, toOffset destination: Int) {
+        settings.snippets.move(fromOffsets: source, toOffset: destination)
+        save()
     }
 
     // MARK: - Scroll speed

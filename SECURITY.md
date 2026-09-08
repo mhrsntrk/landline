@@ -70,9 +70,9 @@ after 10 failures the daemon refuses every further unlock attempt until it is re
 The iOS app also gates on Face ID or the device passcode when it comes to the foreground. That is
 a client-side convenience, not a boundary. The unlock secret is the real gate.
 
-**6. The file inbox sits behind all five of the above.** `POST /v1/token` and
-`PUT /v1/files/{name}` (`docs/FILES.md`) are served on the same listener, through the same serve
-mapping, and check the same login allowlist and the same unlock secret. The secret buys a
+**6. The HTTP endpoints sit behind all five of the above.** The file inbox, the session list and
+the outbox (`docs/HTTP.md`) are served on the same listener, through the same serve mapping, and
+check the same login allowlist and the same unlock secret. The secret buys a
 short-lived bearer token held only in the daemon's memory, so it is verified once per session
 rather than once per upload and never travels on the upload itself. Wrong guesses at the token
 endpoint spend the same failure budget as the shell handshake, so brute forcing one locks out the
@@ -138,6 +138,18 @@ so check it yourself if the machine has other accounts on it.
 **The admin socket is owner-only.** On Unix the daemon listens on `admin.sock` next to the config
 file, mode 0700, with no authentication of its own. Anything running as your user can list and
 kill sessions through it. It cannot spawn a session or read output.
+
+**The session endpoints can kill your work.** `DELETE /v1/sessions/{id}` terminates a child
+process, and anything unsaved in it is gone. That is the same power `landlined sessions kill` has
+had all along and the same power the shell itself has; what is new is that it is reachable from the
+phone, behind the same two credentials. There is no confirmation on the daemon side, because the
+daemon is not where a person is standing.
+
+**The outbox reads files off the host.** Only ones a local process explicitly offered by running
+`landlined send`, over the owner-only admin socket. No request names a path; an id is the only
+thing a caller can present, and ids exist only for files someone chose. Withdrawing an offer never
+deletes anything. If that is still more than a machine should do, there is no way to reach it
+without the login and the secret, which already grant a shell that can read the whole disk.
 
 **An upload writes to the host's disk, and nothing bounds the total.** Each file is capped at
 `upload_max_bytes` and swept after `upload_ttl_hours`, but there is no quota on the inbox as a

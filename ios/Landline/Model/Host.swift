@@ -214,7 +214,7 @@ struct Host: Codable, Identifiable, Hashable {
 
     /// Same origin as `wsURL`, over http(s), for one API path.
     ///
-    /// The daemon serves the file inbox (`docs/FILES.md`) beside the shell on
+    /// The daemon serves the file inbox (`docs/HTTP.md`) beside the shell on
     /// the same listener and behind the same `tailscale serve` mapping, so
     /// every endpoint this app talks to is this origin with a different path.
     func apiURL(path: String) -> URL {

@@ -3,6 +3,7 @@
 #[cfg(all(feature = "harness", not(debug_assertions)))]
 compile_error!("the `harness` feature is dev-only; build it without --release");
 
+mod api;
 mod auth;
 mod config;
 mod doctor;
@@ -13,7 +14,7 @@ mod ring;
 mod server;
 mod session;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -43,6 +44,15 @@ enum Cmd {
     Sessions {
         #[command(subcommand)]
         cmd: SessionsCmd,
+    },
+    /// Offer a file to the phone, so the app can fetch it
+    ///
+    /// The path is registered, not copied: the file stays where it is and is
+    /// read when the phone asks for it. Offers expire, and withdrawing one
+    /// never deletes the file.
+    Send {
+        /// File to offer
+        path: String,
     },
     /// Print the config file path
     ConfigPath,
@@ -93,6 +103,31 @@ fn main() -> Result<()> {
             println!("{resp}");
             Ok(())
         }
+        Cmd::Send { path } => {
+            let cfg = config::Config::load()?;
+            // Absolute here rather than in the daemon: a relative path means
+            // "relative to the shell that typed it", and the daemon's working
+            // directory under launchd or systemd is `/`.
+            let absolute =
+                std::fs::canonicalize(&path).with_context(|| format!("cannot read {path}"))?;
+            let op = serde_json::json!({
+                "op": "offer",
+                "path": absolute.to_string_lossy(),
+            })
+            .to_string();
+            let resp = admin_request(&cfg, &op)?;
+            let parsed: serde_json::Value = serde_json::from_str(&resp)
+                .with_context(|| format!("unexpected daemon response: {resp}"))?;
+            if let Some(message) = parsed.get("error").and_then(|e| e.as_str()) {
+                anyhow::bail!("{message}");
+            }
+            let name = absolute
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.clone());
+            println!("offered {name}; open Landline on your phone to fetch it");
+            Ok(())
+        }
         Cmd::ConfigPath => {
             println!("{}", config::config_path()?.display());
             Ok(())
@@ -121,7 +156,7 @@ fn admin_request(_cfg: &config::Config, op: &str) -> Result<String> {
 
 #[cfg(windows)]
 fn admin_request(_cfg: &config::Config, _op: &str) -> Result<String> {
-    anyhow::bail!("`sessions` is not supported on Windows yet")
+    anyhow::bail!("`sessions` and `send` need the admin socket, which is not on Windows yet")
 }
 
 fn set_unlock(clear: bool) -> Result<()> {
