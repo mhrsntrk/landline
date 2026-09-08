@@ -261,6 +261,9 @@ impl SessionManager {
         // admin socket, the reaper, and the pump's own exit-removal, all of
         // which want this lock.
         {
+            // The map is read, but the pending reservation is mutated under
+            // this lock. A shared lock would let creators exceed the cap.
+            #[allow(clippy::readonly_write_lock)]
             let sessions = self.inner.sessions.write().unwrap();
             if sessions.len() + self.inner.pending.load(Ordering::SeqCst) >= self.inner.max_sessions
             {
