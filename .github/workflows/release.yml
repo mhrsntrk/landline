@@ -337,6 +337,8 @@ jobs:
           brew tap-new --no-git mhrsntrk/local
           local_formula="$(brew --repository)/Library/Taps/mhrsntrk/homebrew-local/Formula/landline.rb"
           cp formula/landline.rb "$local_formula"
+          # Unlike install, bottle --merge does not implicitly trust a formula.
+          brew trust --formula mhrsntrk/local/landline
           brew bottle --merge --write --no-commit bottles/landline--*.bottle.json
           cp "$local_formula" formula/landline.rb
 
