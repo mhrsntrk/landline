@@ -241,6 +241,12 @@ pub struct Outbox {
 
 /// Offers kept at once. Old ones fall off the front, because an outbox is a
 /// hand-off, not a folder.
+///
+/// Unix-gated with `offer` below: the only thing that fills an outbox is
+/// `landlined send`, which reaches the daemon over the admin socket, and there
+/// is no admin socket on Windows yet. The endpoints are still served there and
+/// still answer, with an outbox that is always empty.
+#[cfg_attr(not(unix), allow(dead_code))]
 const MAX_OUTBOX_ENTRIES: usize = 64;
 
 impl Outbox {
@@ -254,6 +260,10 @@ impl Outbox {
     /// The path is canonicalised here, while the offering process is still
     /// around to be told it was wrong, rather than at fetch time when nobody
     /// is watching.
+    ///
+    /// Reached only from the admin socket, which is Unix-only, so on Windows
+    /// this has no caller and `-D warnings` would fail the build over it.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub fn offer(&self, path: &str) -> Result<String, String> {
         let resolved = std::fs::canonicalize(path).map_err(|err| format!("{path}: {err}"))?;
         let meta = std::fs::metadata(&resolved).map_err(|err| format!("{path}: {err}"))?;

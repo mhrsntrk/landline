@@ -1035,16 +1035,32 @@ mod tests {
         .await;
         assert_eq!(killed.status, 204, "{}", killed.body);
 
-        let gone = http(
+        // Deliberately not asserting anything about killing the same id twice.
+        // `kill` terminates the child; the session leaves the registry when the
+        // pump observes the exit, so a second DELETE races that and may
+        // honestly answer either way. An id that never existed is the
+        // deterministic case, and the one worth pinning.
+        let never = http(
             addr,
             "DELETE",
-            &format!("/v1/sessions/{session_id}"),
+            &format!("/v1/sessions/{}", uuid::Uuid::new_v4()),
             Some(LOGIN),
             Some(&token),
             b"",
         )
         .await;
-        assert_eq!(gone.status, 404, "killing twice is not a second kill");
+        assert_eq!(never.status, 404, "{}", never.body);
+
+        let malformed = http(
+            addr,
+            "DELETE",
+            "/v1/sessions/not-a-uuid",
+            Some(LOGIN),
+            Some(&token),
+            b"",
+        )
+        .await;
+        assert_eq!(malformed.status, 400, "{}", malformed.body);
     }
 
     #[tokio::test]

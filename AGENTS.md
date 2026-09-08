@@ -65,6 +65,13 @@ Each of these cost real time. They are listed because they will recur.
   whole session and would occupy pool slots forever.
 - **Terminal output fan-out uses a swappable mpsc slot, never `broadcast`.** A
   lagging broadcast receiver drops messages silently, which corrupts a stream.
+- **Dead code is per platform, and CI denies warnings.** The admin socket is Unix-only, so
+  anything only it calls (`Outbox::offer`) has no caller on Windows and fails the build there
+  under `-D warnings`, having compiled cleanly on the machine it was written on. Reach for
+  `#[cfg_attr(not(unix), allow(dead_code))]` rather than deleting the thing.
+- **Do not assert on a kill you did not wait for.** `SessionManager::kill` terminates the child;
+  the session leaves the registry when the pump observes the exit. A test that kills and then
+  asserts the id is gone passes on a fast machine and fails in CI.
 - **Homebrew needs a bottle.** A formula without one is treated as a source
   build, and Homebrew then refuses on any machine with outdated Command Line
   Tools, even though `install` only copies a compiled binary.
