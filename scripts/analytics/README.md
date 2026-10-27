@@ -38,9 +38,10 @@ clears Apple's privacy threshold. That is a volume gate, not a configuration
 mistake — requesting them again changes nothing, and retention is unmeasurable
 until they fill.
 
-**The three commerce reports will never fill.** Landline is free with no
-in-app purchases. They are in `WANTED` so the series already exists the day that
-changes; the numbers to read here are downloads and discovery.
+**Version 1.1 introduces commerce events.** The free trial and $2.99 USD unlock
+are non-consumable purchases. Read `App Store Purchases Standard` alongside
+downloads and discovery after release. Subscription reports remain empty because
+there is no subscription.
 
 **The JWT is signed by hand.** The key is ES256 and `pyjwt` is not installed on
 this machine; `cryptography` is. `asc.py` builds the header and payload, signs

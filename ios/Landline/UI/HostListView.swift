@@ -17,6 +17,7 @@ struct HostListView: View {
     var settingsPresented: Binding<Bool>?
 
     @Environment(HostStore.self) private var store
+    @Environment(Purchases.self) private var purchases
     @Environment(\.scenePhase) private var scenePhase
 
     /// The sidebar of a split view, rather than the root of a stack. Named
@@ -41,12 +42,29 @@ struct HostListView: View {
     /// The app-wide settings push. Its own route type rather than a `Bool`, so
     /// it can share the stack with `openedHost` without the two colliding.
     @State private var settingsRoute: SettingsRoute?
+    @State private var showingPurchase = false
 
     private enum SettingsRoute: String, Hashable { case settings }
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            TimelineView(.periodic(from: .now, by: 30)) { _ in
+                if purchases.access.status() != .unlocked {
+                    Button { showingPurchase = true } label: {
+                        HStack {
+                            MicroLabel(purchases.access.status().label, color: Theme.accent)
+                            Spacer()
+                            Text("TRIAL & PURCHASE ›").llValue(Theme.accent)
+                        }
+                        .padding(.horizontal, Theme.Metric.gutter)
+                        .frame(minHeight: Theme.Metric.rowHeight)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(InstrumentRowButtonStyle())
+                    Hairline()
+                }
+            }
             if store.hosts.isEmpty {
                 // In the split the detail pane is already teaching the
                 // mechanism at a readable measure, so the 300pt column does not
@@ -60,6 +78,12 @@ struct HostListView: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbarBackground(Theme.ground, for: .navigationBar)
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showingPurchase) {
+            NavigationStack { PurchaseScreen(leading: .close) }
+                .preferredColorScheme(.dark)
+                .presentationBackground(Theme.panel)
+                .presentationCornerRadius(0)
+        }
         .sheet(isPresented: $showingAddSheet) {
             HostEditView(host: Host()) { newHost, secret in
                 store.add(newHost)

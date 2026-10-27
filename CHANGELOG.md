@@ -7,6 +7,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- iOS 1.1: a seven-day full-access trial and $2.99 USD one-time unlock, with
+  localized App Store prices and purchase restoration. Existing customers keep
+  full access. Trial expiry detaches terminal connections without killing remote
+  sessions or deleting saved hosts, settings, or snippets.
+
 ## [0.3.0] - 2026-09-08
 
 ### Fixed

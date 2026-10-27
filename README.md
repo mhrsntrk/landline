@@ -52,6 +52,22 @@ no certificate pinning code anywhere in the client.
 
 ## Quickstart
 
+### Trial and purchase
+
+Version 1.1 introduces a free download and a seven-day trial of every terminal
+feature, followed by an optional **$2.99 USD one-time unlock**. Prices in other
+regions come from the App Store. There is no subscription or automatic charge.
+The trial starts when you choose **Start 7-day free trial**, not when you install.
+
+After expiry, terminal connections require the unlock. Your hosts, settings and
+snippets stay saved; remote sessions detach without being killed and follow the
+daemon's usual idle timeout. Existing App Store users retain full access.
+Restore purchases is available under **Settings > Trial & purchase**.
+
+The daemon remains free and MIT licensed. For local purchase testing, use the
+**Landline StoreKit** Xcode scheme. See [purchase setup](appstore/purchases.md)
+for product IDs, migration details, verification, and release status.
+
 ### On each machine
 
 ```sh
