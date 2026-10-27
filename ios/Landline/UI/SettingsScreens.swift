@@ -27,7 +27,7 @@ struct SettingsView: View {
 
     @State private var route: Route?
 
-    enum Route: String, Hashable { case keyBar, snippets }
+    enum Route: String, Hashable { case keyBar, snippets, purchase }
 
     var body: some View {
         SettingScreen(title: "SETTINGS", annotation: "APP-WIDE / EVERY HOST", leading: leading) {
@@ -66,11 +66,16 @@ struct SettingsView: View {
             }
             Hairline()
             scrollSpeed
+            Hairline()
+            SummaryRow(label: "TRIAL & PURCHASE", value: "VIEW", detail: nil) {
+                route = .purchase
+            }
         }
         .navigationDestination(item: $route) { destination in
             switch destination {
             case .keyBar: KeyBarSettingsView()
             case .snippets: SnippetSettingsView()
+            case .purchase: PurchaseScreen()
             }
         }
         .task {

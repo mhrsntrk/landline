@@ -26,9 +26,8 @@ SNAPSHOT_REQUEST = "55f42de6-5bb5-45cd-a004-a06407b019ed"
 WANTED = [
     "App Store Discovery and Engagement Standard",
     "App Downloads Standard",
-    # Landline is free with no in-app purchases, so these three should stay
-    # empty. They are listed anyway so that the day anything is sold the series
-    # already exists rather than starting from that date.
+    # Version 1.1 adds a free trial and one-time non-consumable unlock.
+    # Purchases may populate after release; subscription reports stay empty.
     "App Store Purchases Standard",
     "App Store Subscription Event Report Standard",
     "App Store Subscription State Report Standard",

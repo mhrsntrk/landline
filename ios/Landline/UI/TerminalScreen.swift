@@ -22,10 +22,17 @@ struct TerminalScreen: View {
 
     @Environment(HostStore.self) private var store
     @Environment(SettingsStore.self) private var settings
+    @Environment(Purchases.self) private var purchases
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
 
     @State private var connection = Connection()
+    init(host: Host, indexColumn: Binding<NavigationSplitViewVisibility>? = nil,
+         connection: Connection = Connection()) {
+        self.host = host
+        self.indexColumn = indexColumn
+        _connection = State(initialValue: connection)
+    }
     @State private var controller = TerminalController()
     @State private var state: Connection.State = .idle
     @State private var attached: AttachedResp?
@@ -119,6 +126,16 @@ struct TerminalScreen: View {
     @State private var fontSize: CGFloat = TerminalFont.defaultSize
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            if purchases.access.hasFullAccess(at: context.date) {
+                terminalContent
+            } else {
+                PurchaseScreen(indexColumn: indexColumn)
+            }
+        }
+    }
+
+    private var terminalContent: some View {
         VStack(spacing: 0) {
             header
             terminalRegion
@@ -654,6 +671,7 @@ struct TerminalScreen: View {
     private static let pickedFileCeiling = 26_214_400
 
     private func send(_ attachment: Attachment) {
+        guard purchases.access.hasFullAccess() else { return }
         upload = .sending(name: attachment.filename, bytes: attachment.data.count)
         let target = liveHost
         // The same secret the shell handshake uses. A host with no unlock sends
@@ -1033,6 +1051,7 @@ struct TerminalScreen: View {
     }
 
     private func reconnect() {
+        guard purchases.access.hasFullAccess() else { return }
         // An explicit reconnect also retries an HTTP refusal from the old link.
         api = HostAPI()
         triedKeychainSecret = false
@@ -1072,6 +1091,7 @@ struct TerminalScreen: View {
     /// unchanged (asserted in `LatchStateTests`), so skipping the call when none
     /// is armed is behaviour-preserving by construction.
     private func sendUserInput(_ data: Data) {
+        guard purchases.access.hasFullAccess() else { return }
         guard !data.isEmpty else { return }
         let out: [UInt8]
         if latches.isAnyArmed {

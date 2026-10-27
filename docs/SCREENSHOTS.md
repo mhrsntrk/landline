@@ -5,6 +5,12 @@ nothing on any frame is mocked: the terminal in the stills and in the video is a
 `landlined` session on a real tmux server on the build machine, running real commands
 against a real checkout.
 
+From iOS 1.1, terminal captures need a valid trial or unlock on the capture
+simulator. Acquire one with the **Landline StoreKit** scheme before running the
+capture scripts; demo seeding does not bypass purchase access. The separate
+purchase-offer review images and their local StoreKit provenance are documented
+in [appstore/review](../appstore/review/README.md).
+
 ```
 ios/screenshots/
   capture.sh          drives the simulators, writes raw/
