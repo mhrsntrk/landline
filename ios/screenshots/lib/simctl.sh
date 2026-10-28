@@ -15,6 +15,9 @@ IPHONE_UDID="${IPHONE_UDID:-BC8D7246-C964-4480-863F-9012BB12B1F6}"
 IPAD_UDID="${IPAD_UDID:-E7FA1587-69DD-4D9B-ACA3-5903677FF1D0}"
 IPHONE_WINDOW="${IPHONE_WINDOW:-iPhone 16 Pro Max}"
 IPAD_WINDOW="${IPAD_WINDOW:-iPad Pro 13-inch (M4)}"
+# iPhone Duo runs only on the iOS 27.1 runtime, in Xcode 27.1's DeviceHub.
+# Unset by default: each machine creates its own, see docs/SCREENSHOTS.md.
+DUO_UDID="${DUO_UDID:-}"
 
 BUNDLE_ID="com.landlineclient.app"
 
@@ -30,6 +33,8 @@ DEMO_TMUX_SOCKET="landlinedemo"
 export TMUX_TMPDIR="/tmp/landline-shots/tmux"
 
 TMUX_BIN="${TMUX_BIN:-$(command -v tmux)}"
+# The pixel probes need Pillow, which the system python3 may not have.
+PY="${PY:-python3}"
 
 dtmux() { TMUX_TMPDIR="$TMUX_TMPDIR" "$TMUX_BIN" -L "$DEMO_TMUX_SOCKET" "$@"; }
 
@@ -90,7 +95,7 @@ hardware_keyboard() {
 soft_keyboard_visible() { # udid
   local probe="/tmp/landline-shots/kbprobe.png"
   shoot "$1" "$probe" || return 1
-  python3 - "$probe" <<'PY'
+  "$PY" - "$probe" <<'PY'
 import sys
 from PIL import Image, ImageStat
 im = Image.open(sys.argv[1]).convert("L")
@@ -121,13 +126,26 @@ status_bar() {
 # both live in the container, and a leftover session id makes the app attach
 # twice, which leaves two tmux clients of different sizes on one session and
 # draws an empty screen.
+#
+# KEEP_PURCHASES=1 clears the container in place instead. Uninstalling also
+# drops the local StoreKit trial the capture simulator was seeded with, and from
+# iOS 1.1 the terminal frames need one.
 reinstall() {
   xcrun simctl terminate "$1" "$BUNDLE_ID" >/dev/null 2>&1 || true
-  xcrun simctl uninstall "$1" "$BUNDLE_ID" >/dev/null 2>&1 || true
+  if [ "${KEEP_PURCHASES:-0}" = 1 ] && xcrun simctl get_app_container "$1" "$BUNDLE_ID" data >/dev/null 2>&1; then
+    local data
+    data="$(xcrun simctl get_app_container "$1" "$BUNDLE_ID" data)"
+    rm -rf "$data/Documents/"* "$data/Library/Preferences/"* "$data/Library/Saved Application State"
+  else
+    xcrun simctl uninstall "$1" "$BUNDLE_ID" >/dev/null 2>&1 || true
+  fi
   xcrun simctl install "$1" "$(app_bundle)"
 }
 
-shoot() { xcrun simctl io "$1" screenshot "$2" >/dev/null 2>&1; }
+# SHOOT_DISPLAY names the screen on a device with more than one. iPhone Duo's
+# outer display is "LCD" and its inner one "LCD-1"; left to itself simctl shoots
+# whichever it last defaulted to, which after a fold is the display that is off.
+shoot() { xcrun simctl io "$1" screenshot ${SHOOT_DISPLAY:+--display="$SHOOT_DISPLAY"} "$2" >/dev/null 2>&1; }
 
 # Is the leader latch armed in this frame? An armed latch fills its cell with
 # the accent (#61AFEF), the only saturated blue anywhere near the key bar.
@@ -135,7 +153,7 @@ shoot() { xcrun simctl io "$1" screenshot "$2" >/dev/null 2>&1; }
 # cleared by a reconnect and spent by the emulator's own replies, and both
 # happen without a trace on this side.
 armed_in() { # png x0 y0 x1 y1  (fractions of the frame)
-  python3 - "$@" <<'PY'
+  "$PY" - "$@" <<'PY'
 import sys
 from PIL import Image
 im = Image.open(sys.argv[1]).convert("RGB")
@@ -199,6 +217,9 @@ EOF
     git clone -q "file://$REPO_ROOT" "$DEMO_HOME/src/landline"
   fi
   git -C "$DEMO_HOME/src/landline" config core.pager cat
+  # The prompt and `git log` are on screen, so show main rather than whatever
+  # branch the operator happens to be capturing from.
+  git -C "$DEMO_HOME/src/landline" checkout -q -B main origin/main
 }
 
 start_daemon() {

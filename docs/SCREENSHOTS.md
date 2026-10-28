@@ -42,6 +42,43 @@ The per-locale `preview.mp4` files are generated, not tracked: they are byte-ide
 `raw/video/`, and committing them meant the same two videos lived in the repository three
 times each.
 
+## iPhone Duo
+
+The `APP_IPHONE_DUO` set carries the store's "Made for iPhone Duo" badge. It needs
+Xcode 27.1 and its iOS 27.1 runtime (`xcodebuild -downloadPlatform iOS`), which is the
+only runtime the Duo device type boots on. Xcode 27 replaced Simulator.app with
+**DeviceHub**, which exposes no menus or window to a script, and that changes three things:
+
+- **The pose is set by hand.** DeviceHub's pose buttons fold or open the device and its
+  rotate button turns it. Neither `simctl` nor DeviceHub lets a script do either, so each
+  pose is its own run, both in portrait:
+
+  ```sh
+  xcrun simctl create "iPhone Duo" com.apple.CoreSimulator.SimDeviceType.iPhone-Duo
+  export DUO_UDID=<that udid> PY=<a python3 with Pillow>
+  # open the Duo in DeviceHub, rotate to portrait
+  ios/screenshots/capture.sh duo-inner             # 01, 03, 04, 05 on the inner display
+  # fold it, rotate to portrait
+  ios/screenshots/capture.sh duo-outer             # 02, 06 on the outer display
+  ```
+
+- **The software keyboard cannot be cycled off from a menu.** Duo runs set
+  `LANDLINE_DEMO_NOKEYBOARD=1`, and the app leaves the terminal without first responder.
+- **The screen is named explicitly.** The outer display is `LCD`, the inner one `LCD-1`,
+  and display UUIDs change with the pose. Left to itself, `simctl io screenshot` shoots
+  the display it last defaulted to, which after a fold is the one that is switched off:
+  a frame of solid black at the wrong size.
+
+The terminal frames need a StoreKit trial on the Duo simulator, and **uninstalling the app
+drops it**, so Duo runs clear the container in place (`KEEP_PURCHASES=1`) instead of
+reinstalling. Seed the trial once with an `SKTestSession` against
+`LandlineTests/StoreKit/Landline.storekit` that calls `Purchases.startTrial()` and does
+not clear its transactions (run it with `test-without-building -only-testing:`; a run that
+also rebuilds has been seen to hang at the purchase).
+
+`compose.py` prints all six frames on one 2007x2853 plate, the inner display's portrait
+size, because one Duo set holds both displays.
+
 Then upload. The layout is what `ascelerate apps media upload` expects, and files sort
 alphabetically into gallery order, which is why the stills are `01_` to `0N_` and the
 video is `preview.mp4`.
@@ -106,6 +143,7 @@ cannot reach any of them.
 | `LANDLINE_DEMO_KEYBAR` | `tmux`: a key row carrying the leader and the window keys |
 | `LANDLINE_DEMO_SECTION` | which host setting screen the edit sheet opens on |
 | `LANDLINE_DEMO_CHAIN` | which startup-command shape the edit sheet is seeded with |
+| `LANDLINE_DEMO_NOKEYBOARD` | `1`: the terminal never takes first responder, so no software keyboard covers the frame (Duo runs, see above) |
 
 `LANDLINE_DEMO_ENDPOINT` exists because the iPad header band prints `ENDPOINT` and the
 index row prints `hostname:port`, and a listing for a Tailscale client that advertises

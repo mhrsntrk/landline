@@ -2,7 +2,8 @@ import SwiftUI
 
 // Where the app decides what shape it is.
 //
-// Two structures, chosen by horizontal size class and never by device idiom:
+// Two structures, chosen by horizontal size class and the window's measured
+// width, never by device idiom:
 //
 //   compact  a pushed stack. Every iPhone, and an iPad in a narrow Split View
 //            or Slide Over, which is a phone-shaped window and must behave like
@@ -11,6 +12,11 @@ import SwiftUI
 //   regular  a two-column split. The index is a persistent sidebar and the
 //            terminal fills the detail pane, so a wide screen shows both and
 //            changing machines is one tap that never takes the terminal away.
+//
+// A regular window narrower than `NavigationMode.minimumSplitWidth` is a stack
+// too. iPhone Duo held open in portrait is regular and 669pt wide, and there
+// SwiftUI will not draw a balanced split: it floats the index over the terminal
+// and dims the session, the one thing this layout exists to prevent.
 //
 // The compact branch is byte-for-byte the structure this app always had: a
 // `NavigationStack` around `HostListView`, which pushes `TerminalScreen` and
@@ -31,9 +37,15 @@ struct RootView: View {
     /// screen wants it collapsed next launch too.
     @State private var columnVisibility = NavigationSplitViewVisibility.all
 
-    private var mode: NavigationMode { NavigationMode(horizontalSizeClass) }
-
     var body: some View {
+        // Measured rather than inferred: the size class alone cannot tell a
+        // 669pt regular window from a 1032pt one.
+        GeometryReader { proxy in
+            content(NavigationMode(horizontalSizeClass, width: proxy.size.width))
+        }
+    }
+
+    private func content(_ mode: NavigationMode) -> some View {
         // A window that grows from Slide Over to full screen swaps one whole
         // hierarchy for the other, which tears the terminal down and stands a
         // new one up. That is a detach and a reattach, never a kill: the session
@@ -144,12 +156,24 @@ enum NavigationMode: String, Equatable {
     /// A persistent index beside the terminal. Regular width.
     case split
 
-    init(_ horizontalSizeClass: UserInterfaceSizeClass?) {
+    /// The narrowest window that gets the split. Below it SwiftUI overlays
+    /// the index on the terminal instead of setting them side by side. 700pt
+    /// sends iPhone Duo open in portrait (669pt) to the stack and keeps every
+    /// iPad full-screen window, iPad mini's 744pt portrait included, on the
+    /// split it already had.
+    static let minimumSplitWidth: CGFloat = 700
+
+    init(_ horizontalSizeClass: UserInterfaceSizeClass?, width: CGFloat? = nil) {
         // nil is the state SwiftUI reports before a window has been measured.
         // Compact is the safe answer: a stack laid out in a wide window looks
         // sparse for one frame, a split laid out in a narrow one has no room
         // for either column.
-        self = horizontalSizeClass == .regular ? .split : .stack
+        guard horizontalSizeClass == .regular else { self = .stack; return }
+        if let width, width < Self.minimumSplitWidth {
+            self = .stack
+        } else {
+            self = .split
+        }
     }
 }
 

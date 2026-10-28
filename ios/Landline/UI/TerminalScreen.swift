@@ -1229,6 +1229,11 @@ enum SystemAppearance {
     /// always answer "dark"; a host set to follow the system needs the real
     /// answer for its terminal palette.
     static var isLight: Bool {
-        UIScreen.main.traitCollection.userInterfaceStyle == .light
+        // The scene's screen, not `UIScreen.main`: iPhone Duo has two
+        // displays, and Apple asks apps to stop reaching for a global screen.
+        let screen = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.screen }
+            .first
+        return screen?.traitCollection.userInterfaceStyle == .light
     }
 }
