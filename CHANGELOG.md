@@ -9,6 +9,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- iOS 1.2: built with the iOS 27.1 SDK for iPhone Duo, edge to edge on both displays.
+  A regular-width window narrower than 700pt, which is iPhone Duo open in portrait, now
+  uses the stacked layout: there SwiftUI floated the machine index over the terminal and
+  dimmed the session instead of setting them side by side. App Store screenshots for both
+  Duo displays.
+
 - iOS 1.1: a seven-day full-access trial and $2.99 USD one-time unlock, with
   localized App Store prices and purchase restoration. Existing customers keep
   full access. Trial expiry detaches terminal connections without killing remote

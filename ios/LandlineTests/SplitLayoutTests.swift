@@ -24,6 +24,24 @@ final class NavigationModeTests: XCTestCase {
     func testUnknownWidthFallsBackToTheStack() {
         XCTAssertEqual(NavigationMode(nil), .stack)
     }
+
+    /// iPhone Duo open in portrait is regular but 669pt wide, where SwiftUI
+    /// overlays the index on the terminal rather than drawing a balanced split.
+    func testNarrowRegularWindowIsTheStack() {
+        XCTAssertEqual(NavigationMode(.regular, width: 669), .stack)
+    }
+
+    /// iPhone Duo open in landscape, iPad mini in portrait, a 13-inch iPad.
+    func testWideRegularWindowsAreTheSplit() {
+        for width: CGFloat in [951, 744, 1032] {
+            XCTAssertEqual(NavigationMode(.regular, width: width), .split, "\(width)")
+        }
+    }
+
+    /// Width never turns a compact window into a split.
+    func testCompactStaysTheStackAtAnyWidth() {
+        XCTAssertEqual(NavigationMode(.compact, width: 1200), .stack)
+    }
 }
 
 /// DESIGN.md pins one back affordance, in one place, wearing one set of

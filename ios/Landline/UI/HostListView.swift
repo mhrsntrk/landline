@@ -887,6 +887,18 @@ enum DemoSeed {
     /// screenshot run has no fingers.
     static var opensEditor: Bool { mode == "edit" || mode == "editbottom" || showsValidation }
 
+    /// Debug screenshot hook: leave the terminal without first responder, so
+    /// no software keyboard covers the frame. Hardware keyboard emulation used
+    /// to be toggled from Simulator's menu, and Xcode 27's DeviceHub exposes no
+    /// menu to script, so a run that has no fingers asks the app instead.
+    static var holdsKeyboard: Bool {
+        #if DEBUG
+        return mode != nil && ProcessInfo.processInfo.environment["LANDLINE_DEMO_NOKEYBOARD"] == "1"
+        #else
+        return false
+        #endif
+    }
+
     /// Debug screenshot hook: land the edit sheet at its bottom, since a
     /// screenshot run cannot scroll either.
     static var scrollsToBottom: Bool { mode == "editbottom" }

@@ -51,6 +51,9 @@ KOREAN_INDEX = 2  # Medium
 SLOTS = {
     "iphone": ("APP_IPHONE_67", 1290, 2796),
     "ipad": ("APP_IPAD_PRO_3GEN_129", 2048, 2732),
+    # iPhone Duo's inner display in portrait. One set holds both displays, so
+    # the outer-display frames are printed on the same plate size.
+    "duo": ("APP_IPHONE_DUO", 2007, 2853),
 }
 
 LOCALES = ("en-US", "ko")
