@@ -50,7 +50,7 @@ jobs:
           simulator=$(xcrun simctl list devices available --json \
             | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(dev['udid'] for runtime in sorted(d) if 'iOS' in runtime for dev in d[runtime] if dev.get('isAvailable')))")
           echo "using simulator $simulator"
-          xcodebuild -project Landline.xcodeproj -scheme Landline \
+          xcodebuild -project Landline.xcodeproj -scheme 'Landline StoreKit' \
             -destination "id=$simulator" \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \

@@ -1,0 +1,45 @@
+{
+  "identifier": "LANDLINE7DAY1",
+  "nonRenewingSubscriptions": [],
+  "products": [
+    {
+      "displayPrice": "0.00",
+      "familyShareable": false,
+      "internalID": "70000001",
+      "localizations": [
+        {
+          "description": "Seven days of every feature. No automatic charge.",
+          "displayName": "7-day Trial",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "com.landlineclient.app.trial7days",
+      "referenceName": "7-day Trial",
+      "type": "NonConsumable"
+    },
+    {
+      "displayPrice": "2.99",
+      "familyShareable": false,
+      "internalID": "70000002",
+      "localizations": [
+        {
+          "description": "Every terminal feature. One payment.",
+          "displayName": "Unlock Landline",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "com.landlineclient.app.fullUnlock",
+      "referenceName": "Unlock Landline",
+      "type": "NonConsumable"
+    }
+  ],
+  "settings": {
+    "_locale": "en_US",
+    "_storefront": "USA"
+  },
+  "subscriptionGroups": [],
+  "version": {
+    "major": 3,
+    "minor": 0
+  }
+}

@@ -914,7 +914,7 @@ final class TerminalController {
     /// does nothing when the terminal already holds it, so it cannot dismiss and
     /// re-present the software keyboard underneath a typing thumb.
     func focus() {
-        guard let terminalView, !terminalView.isFirstResponder else { return }
+        guard let terminalView, !terminalView.isFirstResponder, !DemoSeed.holdsKeyboard else { return }
         _ = terminalView.becomeFirstResponder()
     }
 
@@ -1901,6 +1901,7 @@ struct SwiftTermView: UIViewRepresentable {
         context.coordinator.scroller.attach(to: view)
 
         DispatchQueue.main.async {
+            guard !DemoSeed.holdsKeyboard else { return }
             _ = view.becomeFirstResponder()
         }
         return view

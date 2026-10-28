@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Landline**, last updated 4 September 2026.
+**Landline**, last updated 17 September 2026.
 
 Landline collects nothing. There is no account, no analytics, no telemetry, no
 crash reporting, no advertising identifier, and no server operated by the
@@ -9,7 +9,8 @@ nowhere for it to go.
 
 ## What the app stores, and where
 
-Everything stays on your device.
+Your hosts, terminal settings and content stay on your devices. Apple handles
+App Store purchases separately, as described below.
 
 | Data | Where it lives | Leaves the device? |
 |---|---|---|
@@ -21,8 +22,18 @@ Everything stays on your device.
 | Snippets you save | A file in the app's private container | Only to the machine you type them into |
 | Files a machine sends you | A temporary file, cleared by iOS | Never leaves the device |
 
-Deleting the app deletes all of it. There is no backup on our side to delete,
-because we never received a copy.
+Deleting the app removes its local files. Keychain entries may persist under
+iOS's Keychain rules. There is no backup on our side to delete, because we never
+received a copy. Purchase history remains associated with your Apple Account.
+
+## Trial and purchases
+
+Version 1.1 uses Apple's StoreKit to load localized prices, start the free trial,
+purchase the one-time unlock, and restore purchases. StoreKit contacts Apple;
+payment information is handled by Apple and is never available to the developer.
+The app checks Apple's signed purchase history locally to determine access,
+including continued access for existing customers. It sends no terminal content,
+host configuration, snippets, or unlock secrets with purchase requests.
 
 ## What travels over the network
 

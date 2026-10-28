@@ -3,6 +3,8 @@
 #
 #   ios/screenshots/capture.sh            both devices
 #   ios/screenshots/capture.sh iphone     one device
+#   ios/screenshots/capture.sh duo-inner  iPhone Duo, open pose (DUO_UDID set)
+#   ios/screenshots/capture.sh duo-outer  iPhone Duo, folded pose
 #
 # Writes ios/screenshots/raw/<device>/NN_<name>.png. compose.py turns those into
 # the uploadable en-US/ and ko/ trees. See docs/SCREENSHOTS.md.
@@ -172,11 +174,77 @@ capture_ipad() {
   shoot "$udid" "$out/05_keybar.png"
 }
 
+# iPhone Duo. The pose (folded or open) is set by hand with DeviceHub's pose
+# buttons, because neither simctl nor DeviceHub exposes it to a script, so each
+# pose is its own run. Frames from both land in raw/duo, numbered to interleave.
+# DeviceHub also has no keyboard menu to cycle, so the app is asked to leave the
+# software keyboard down (`DemoSeed.holdsKeyboard`), and the container is
+# cleared in place to keep the seeded StoreKit trial.
+duo_env() {
+  if [ -z "$DUO_UDID" ]; then
+    echo "set DUO_UDID to the iPhone Duo simulator (see docs/SCREENSHOTS.md)" >&2
+    exit 2
+  fi
+  export KEEP_PURCHASES=1 SIMCTL_CHILD_LANDLINE_DEMO_NOKEYBOARD=1
+  mkdir -p "$RAW/duo"
+}
+
+# Open pose, inner display held in portrait.
+capture_duo_inner() {
+  duo_env
+  export SHOOT_DISPLAY=LCD-1
+  local udid="$DUO_UDID" out="$RAW/duo"
+  local LDR_BOX="${DUO_LDR_BOX:-0.21 0.950 0.28 0.966}"
+
+  # 01  a live session doing real work, at the size the open phone gives it
+  dtmux kill-server >/dev/null 2>&1 || true
+  launch "$udid" live
+  wait_for_session 20
+  seed_tmux_work 5
+  shoot "$udid" "$out/01_session.png"
+
+  # 03  tmux, leader armed
+  dtmux kill-server >/dev/null 2>&1 || true
+  launch "$udid" live
+  wait_for_session 20
+  seed_tmux_split
+  launch_with_armed_leader "$udid" "$out/03_tmux.png" $LDR_BOX
+
+  # 04  palettes
+  launch "$udid" edit SIMCTL_CHILD_LANDLINE_DEMO_SECTION=palette
+  sleep 5
+  shoot "$udid" "$out/04_palettes.png"
+
+  # 05  key bar
+  launch "$udid" keybar
+  sleep 5
+  shoot "$udid" "$out/05_keybar.png"
+}
+
+# Folded pose, outer display.
+capture_duo_outer() {
+  duo_env
+  export SHOOT_DISPLAY=LCD
+  local udid="$DUO_UDID" out="$RAW/duo"
+
+  # 02  the index on the outer display
+  launch "$udid" index
+  sleep 5
+  shoot "$udid" "$out/02_index.png"
+
+  # 06  adding a machine
+  launch "$udid" edit SIMCTL_CHILD_LANDLINE_DEMO_CHAIN=fixed
+  sleep 5
+  shoot "$udid" "$out/06_host.png"
+}
+
 case "$WHICH" in
   iphone) capture_iphone ;;
   ipad)   capture_ipad ;;
   all)    capture_iphone; capture_ipad ;;
-  *) echo "usage: capture.sh [iphone|ipad|all]" >&2; exit 2 ;;
+  duo-inner) capture_duo_inner ;;
+  duo-outer) capture_duo_outer ;;
+  *) echo "usage: capture.sh [iphone|ipad|all|duo-inner|duo-outer]" >&2; exit 2 ;;
 esac
 
 echo "raw frames in $RAW"

@@ -3,3 +3,7 @@
 xcuserdata/
 .DS_Store
 /ios/build
+
+# Local cache of Apple's analytics TSVs
+scripts/analytics/data/
+scripts/analytics/__pycache__/
