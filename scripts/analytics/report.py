@@ -107,26 +107,43 @@ def funnel():
     print(f"{dates2[0]} .. {dates2[-1]}")
     events = total(rows2, header2, ["Event"])
     impressions = events.get(("Impression",), 0)
-    page_views = events.get(("Page view",), 0)
     show("by event", events)
     show("impressions by territory (top 10)", total(
         [r for r in rows2 if r[header2.index("Event")] == "Impression"], header2, ["Territory"]), limit=10)
 
+    # A "Page view" event is not always a product page visit. `Page Type = Media
+    # view` counts screenshot and preview swipes in search results, and on Landline
+    # it was 60% of all page views, which made views -> downloads read 2.3% instead
+    # of ~11%. Only `Product page` is the denominator for listing conversion.
+    event_index = header2.index("Event")
+    page_type_index = header2.index("Page Type")
+    views = [r for r in rows2 if r[event_index] == "Page view"]
+    product_views = [r for r in views if r[page_type_index] == "Product page"]
+    show("page views by page type", total(views, header2, ["Page Type"]))
+    product_page_views = sum(total(product_views, header2, ["Date"]).values())
+    # Territory skew matters here: a storefront where the app cannot work (Landline
+    # in CN, where Tailscale is blocked) can dominate views and drag the rate down.
+    show("product page views by territory (top 10)",
+         total(product_views, header2, ["Territory"]), limit=10)
+
     if impressions:
-        print(f"\npage views / impression:      {page_views / impressions * 100:.1f}%")
+        print(f"\nproduct page views / impr:    {product_page_views / impressions * 100:.1f}%")
         print(f"first-time downloads / impr:  {installs / impressions * 100:.2f}%")
-    if page_views:
-        print(f"first-time downloads / view:  {installs / page_views * 100:.1f}%")
+    if product_page_views:
+        print(f"first-time downloads / product page view: {installs / product_page_views * 100:.1f}%")
 
     # Cumulative rates hide the shape. Reach on these apps moves in spikes that
     # evaporate within two days, so a single high day means nothing on its own.
     daily_impressions = by_date(rows2, header2, "Event", "Impression")
+    daily_product_views = by_date(views, header2, "Page Type", "Product page")
     daily_installs = by_date(rows, header, "Download Type", "First-time download")
     recent = sorted(set(daily_impressions) | set(daily_installs))[-14:]
     if recent:
         print("\n-- last 14 dates --")
         for date in recent:
-            print(f"  {date}  impressions {daily_impressions[date]:>5}   first-time {daily_installs[date]:>3}")
+            print(f"  {date}  impressions {daily_impressions[date]:>5}"
+                  f"   product views {daily_product_views[date]:>4}"
+                  f"   first-time {daily_installs[date]:>3}")
     return installs
 
 
