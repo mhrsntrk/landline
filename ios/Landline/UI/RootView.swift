@@ -290,16 +290,18 @@ struct DetailPlaceholderView: View {
     private var setup: some View {
         VStack(alignment: .leading, spacing: 0) {
             Hairline().padding(.top, Theme.Metric.grid * 6)
-            step(label: "01",
-                 command: "landlined",
-                 text: "The daemon runs on the machine and binds loopback only.")
+            ForEach(HostSetup.steps, id: \.label) { setupStep in
+                step(label: setupStep.label, command: setupStep.command, text: setupStep.note)
+                Hairline()
+            }
+            ShareLink(item: HostSetup.shareText) {
+                Text("SEND SETUP TO YOUR COMPUTER")
+            }
+            .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
+            .padding(.vertical, Theme.Metric.grid * 4)
             Hairline()
-            step(label: "02",
-                 command: "tailscale serve --bg --https=443 http://127.0.0.1:7777",
-                 text: "Tailscale terminates TLS and proves who is calling.")
-            Hairline()
-            step(label: "03",
-                 text: "Add the machine with + HOST in the index, using the tailnet name `tailscale status` prints.")
+            step(label: "04",
+                 text: "Add the machine with + HOST in the index, using the tailnet name `landlined doctor` prints.")
             Hairline()
         }
     }

@@ -606,13 +606,21 @@ private struct EmptyIndexView: View {
 
                 Text(dense
                      ? "Nothing in the index yet. The pane beside this one says what has to be running on the machine first."
-                     : "Landline reaches machines you already own, over your own tailnet. A machine appears here once the daemon is running on it and Tailscale is in front.")
+                     : "Landline reaches machines you already own, over your own tailnet. Tailscale has to be on this phone and on the machine, signed in to the same tailnet. Then three commands on the machine:")
                     .llProse()
                     .fixedSize(horizontal: false, vertical: true)
 
                 if !dense {
                     fullSetup
-                    proseText("Then add the machine's tailnet name, the `\(Host.tailnetExample)` shape that `tailscale status` prints.")
+                    // The commands are typed on a different machine, and copying
+                    // them one at a time on a phone is where people gave up. The
+                    // whole setup goes out in one share: AirDrop, Messages or Mail
+                    // to the computer, then paste.
+                    ShareLink(item: HostSetup.shareText) {
+                        Text("SEND SETUP TO YOUR COMPUTER")
+                    }
+                    .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
+                    proseText("Then add the machine's tailnet name, the `\(Host.tailnetExample)` shape that `landlined doctor` prints.")
                         .llProse()
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -634,29 +642,10 @@ private struct EmptyIndexView: View {
             // "run landlined", which is only actionable if you already have it,
             // and the answer to "where do I get it" was the README of a repo
             // nobody is holding while they read this.
-            command(
-                step: "01",
-                text: "brew install mhrsntrk/tap/landline",
-                note: "Or download a binary from the releases page. Linux and Windows too."
-            )
-            Hairline()
-            command(
-                step: "02",
-                text: "landlined install",
-                note: "Runs the daemon at login and binds loopback only."
-            )
-            Hairline()
-            command(
-                step: "03",
-                text: "tailscale serve --bg --https=443 http://127.0.0.1:7777",
-                note: "Tailscale terminates TLS and proves who is calling. No open port, no SSH key."
-            )
-            Hairline()
-            command(
-                step: "04",
-                text: "landlined doctor",
-                note: "Checks every step above and prints the address to type in below."
-            )
+            ForEach(Array(HostSetup.steps.enumerated()), id: \.offset) { index, step in
+                if index > 0 { Hairline() }
+                command(step: step.label, text: step.command, note: step.note)
+            }
         }
         .padding(.vertical, Theme.Metric.grid * 4)
         .padding(.horizontal, Theme.Metric.gutter)
@@ -692,6 +681,56 @@ private struct EmptyIndexView: View {
                 .llProse()
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// The host-side setup, in one place so the phone index, the iPad detail pane
+/// and the shared text never disagree. Three commands since landlined 0.4.0,
+/// where `install` also allows the owner's login and turns on serve. Before
+/// that the allowlist step was missing from every set of instructions, and a
+/// new user who followed them exactly ended at NOT ALLOWED.
+enum HostSetup {
+    struct Step {
+        let label: String
+        let command: String
+        let note: String
+    }
+
+    static let installScript =
+        "curl -fsSL https://raw.githubusercontent.com/mhrsntrk/landline/main/packaging/install.sh | sh"
+
+    static let steps: [Step] = [
+        Step(label: "01",
+             command: "brew install mhrsntrk/tap/landline",
+             note: "No Homebrew, or on Linux: the install script in the shared setup. Windows: the releases page."),
+        Step(label: "02",
+             command: "landlined install",
+             note: "Starts the daemon at login, allows your tailnet login, and turns on tailscale serve. Anything it cannot do, it prints the command for."),
+        Step(label: "03",
+             command: "landlined doctor",
+             note: "Checks every step and prints the address to add here."),
+    ]
+
+    static var shareText: String {
+        """
+        Landline setup, run on the machine you want to reach.
+        Tailscale must be running there, signed in to the same tailnet as your phone.
+
+        1. Install the daemon (macOS or Linux with Homebrew):
+           brew install mhrsntrk/tap/landline
+           Without Homebrew:
+           \(installScript)
+           Windows: https://github.com/mhrsntrk/landline/releases/latest
+
+        2. Start it, allow your tailnet login, turn on tailscale serve:
+           landlined install
+
+        3. Check it and get the address for the app:
+           landlined doctor
+
+        Then add the hostname from the "app url" line in Landline.
+        Help: https://github.com/mhrsntrk/landline#quickstart
+        """
     }
 }
 
@@ -853,7 +892,7 @@ enum HostDiagnosis: Equatable {
         case .unknown, .checking, .reachable:
             return nil
         case .loginNotAllowed:
-            return "The daemon answered and refused this login. Add it to `allowed_logins` in the host's config and restart the daemon."
+            return "The daemon answered and refused this login. On that machine run `landlined allow you@example.com` with the login this phone uses on the tailnet."
         case .nameDoesNotResolve:
             return "That name did not resolve. Check the hostname, and that Tailscale is connected on this phone with MagicDNS on."
         case .noAnswer:

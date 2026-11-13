@@ -4,8 +4,12 @@
 
 A fixed, private, direct line to every machine you own. Terminal on your iPhone, over your own tailnet.
 
+**[Get Landline on the App Store](https://apps.apple.com/app/id6808344753)**: free for seven days, then
+$2.99 once. No subscription. The daemon is free and MIT licensed.
+
 [![ci](https://img.shields.io/github/actions/workflow/status/mhrsntrk/landline/ci.yml?branch=main&label=ci)](https://github.com/mhrsntrk/landline/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![App Store](https://img.shields.io/badge/App_Store-iPhone_%7C_iPad-0D96F6?logo=apple)](https://apps.apple.com/app/id6808344753)
 [![platforms](https://img.shields.io/badge/hosts-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#quickstart)
 
 Landline is two pieces: `landlined`, a small Rust daemon you run on each machine you own, and a
@@ -87,19 +91,19 @@ architecture; `install.sh` above works regardless.
 Then, on every host:
 
 ```sh
-landlined install                                       # launchd, systemd user unit, or scheduled task at logon
-tailscale serve --bg --https=443 http://127.0.0.1:7777  # terminate TLS on the tailnet, proxy to the daemon
+landlined install    # launchd, systemd user unit, or scheduled task at logon
 ```
 
-Add your tailnet login to the config, otherwise the daemon fails closed and rejects everyone:
+`install` also allows the tailnet login that owns the machine (the daemon otherwise fails closed
+and rejects everyone) and points `tailscale serve` at the daemon when nothing is served yet. It
+leaves an existing allowlist or serve config alone and prints the command instead. On Linux,
+`tailscale serve` may need `sudo`. To allow someone else, or the login your phone uses on a tagged
+machine:
 
 ```sh
+landlined allow you@example.com
 landlined config-path        # prints the config file path for this platform
 landlined set-unlock         # optional second factor, argon2id hashed into the config
-```
-
-```toml
-allowed_logins = ["you@example.com"]
 ```
 
 Now check the machine end to end:
@@ -124,7 +128,7 @@ one-command answer.
 ### On your phone
 
 1. Install Tailscale and sign in to the same tailnet.
-2. Install Landline from the App Store, or build it yourself (see below).
+2. Install [Landline from the App Store](https://apps.apple.com/app/id6808344753), or build it yourself (see below).
 3. Add a host: paste the hostname from the `app url` line, for example
    `macbook.tail1a2b3.ts.net`. Port 443, TLS on.
 4. Tap it. You get a shell.

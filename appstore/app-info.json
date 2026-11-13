@@ -1,0 +1,43 @@
+{
+  "_note": "App-level fields (appInfoLocalizations). Apple only accepts edits while a new version is in Prepare for Submission. Shipped with 1.3 (2026-11-13). es-MX keywords also index in the US storefront and fr-CA in Canada, so they carry different terms from en-US/fr-FR on purpose. The app binary is English only; these are listing translations.",
+  "en-US": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "No SSH keys. No open ports."
+  },
+  "ko": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "SSH 키, 포트 개방 필요 없음"
+  },
+  "es-MX": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "Sin claves SSH, sin puertos"
+  },
+  "es-ES": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "Sin claves SSH, sin puertos"
+  },
+  "fr-FR": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "Sans clé SSH, sans port ouvert"
+  },
+  "fr-CA": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "Sans clé SSH, sans port ouvert"
+  },
+  "de-DE": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "Ohne SSH-Keys und offene Ports"
+  },
+  "ru": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "Без SSH-ключей и портов"
+  },
+  "ja": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "SSH鍵も開放ポートも不要"
+  },
+  "pt-BR": {
+    "name": "Landline: Tailscale SSH",
+    "subtitle": "Sem chaves SSH, sem portas"
+  }
+}

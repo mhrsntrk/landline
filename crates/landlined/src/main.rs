@@ -13,6 +13,7 @@ mod pty;
 mod ring;
 mod server;
 mod session;
+mod setup;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -54,6 +55,11 @@ enum Cmd {
         /// File to offer
         path: String,
     },
+    /// Allow a tailnet login to connect (defaults to this machine's owner)
+    Allow {
+        /// Login to allow, e.g. you@example.com
+        login: Option<String>,
+    },
     /// Print the config file path
     ConfigPath,
     /// Set or clear the unlock secret (argon2id hashed into the config)
@@ -84,6 +90,7 @@ fn main() -> Result<()> {
             tokio::runtime::Runtime::new()?.block_on(server::run(cfg))
         }
         Cmd::Install => install::install(),
+        Cmd::Allow { login } => setup::allow(login),
         Cmd::Uninstall => install::uninstall(),
         Cmd::Status => {
             let cfg = config::Config::load()?;

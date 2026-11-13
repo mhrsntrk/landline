@@ -120,7 +120,7 @@ fn tailscale_on_path() -> Result<String, String> {
 }
 
 /// Run `tailscale status --json` and parse it. Shared by checks 2, 3 and 8.
-fn tailscale_status_json() -> Result<serde_json::Value, String> {
+pub(crate) fn tailscale_status_json() -> Result<serde_json::Value, String> {
     let out = Command::new("tailscale")
         .args(["status", "--json"])
         .output()
@@ -155,14 +155,27 @@ fn magicdns_check(status: &Result<serde_json::Value, String>) -> Result<String, 
     }
 }
 
-/// Check 4: `tailscale serve` is configured and mentions our port.
-fn serve_check(listen: &str) -> Result<String, String> {
-    let port = listen_port(listen)?;
-    let fix = format!("run: tailscale serve --bg --https=443 http://127.0.0.1:{port}");
-    let out = Command::new("tailscale")
-        .args(["serve", "status"])
-        .output()
-        .map_err(|err| format!("could not run `tailscale serve status`: {err}"))?;
+/// What `tailscale serve` is doing on this machine, as far as Landline cares.
+pub(crate) enum ServeState {
+    /// Nothing is served.
+    None,
+    /// A serve config exists and forwards to our port.
+    Ours,
+    /// A serve config exists for something else.
+    Other,
+    /// `tailscale serve status` could not be run.
+    Unavailable(String),
+}
+
+pub(crate) fn serve_state(port: u16) -> ServeState {
+    let out = match Command::new("tailscale").args(["serve", "status"]).output() {
+        Ok(out) => out,
+        Err(err) => {
+            return ServeState::Unavailable(format!(
+                "could not run `tailscale serve status`: {err}"
+            ))
+        }
+    };
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -172,12 +185,23 @@ fn serve_check(listen: &str) -> Result<String, String> {
         || text.to_ascii_lowercase().contains("no serve config")
         || text.trim().is_empty()
     {
-        return Err(format!("no serve config; {fix}"));
-    }
-    if text.contains(&port.to_string()) {
-        Ok(String::new())
+        ServeState::None
+    } else if text.contains(&port.to_string()) {
+        ServeState::Ours
     } else {
-        Err(format!("serve config does not mention port {port}; {fix}"))
+        ServeState::Other
+    }
+}
+
+/// Check 4: `tailscale serve` is configured and mentions our port.
+fn serve_check(listen: &str) -> Result<String, String> {
+    let port = listen_port(listen)?;
+    let fix = format!("run: tailscale serve --bg --https=443 http://127.0.0.1:{port}");
+    match serve_state(port) {
+        ServeState::Ours => Ok(String::new()),
+        ServeState::None => Err(format!("no serve config; {fix}")),
+        ServeState::Other => Err(format!("serve config does not mention port {port}; {fix}")),
+        ServeState::Unavailable(err) => Err(err),
     }
 }
 
@@ -212,7 +236,7 @@ fn admin_socket_check() -> Result<String, String> {
 /// Check 7: an empty allowlist means the daemon rejects everyone.
 fn allowed_logins_check(cfg: &Config) -> Result<String, String> {
     if cfg.allowed_logins.is_empty() {
-        Err("config allows nobody; add your login to allowed_logins".to_string())
+        Err("config allows nobody; run: landlined allow".to_string())
     } else {
         Ok(format!("{} login(s)", cfg.allowed_logins.len()))
     }
@@ -256,7 +280,7 @@ fn app_url(status: &Result<serde_json::Value, String>) -> Result<String, String>
 }
 
 /// Parse the TCP port out of a `host:port` listen address.
-fn listen_port(listen: &str) -> Result<u16, String> {
+pub(crate) fn listen_port(listen: &str) -> Result<u16, String> {
     listen
         .rsplit(':')
         .next()

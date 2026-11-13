@@ -10,8 +10,24 @@ pub mod windows;
 
 use anyhow::{Context, Result};
 
+/// Install the service, and do the two setup steps that used to be manual:
+/// allow this machine's owner, and point `tailscale serve` at the daemon.
 pub fn install() -> Result<()> {
-    platform_install()
+    let mut cfg = crate::config::Config::load()?;
+    // Before the service starts, so the daemon reads the allowlist on its
+    // first start rather than needing a restart.
+    crate::setup::ensure_allowed_login(&mut cfg)?;
+    platform_install()?;
+    crate::setup::ensure_serve(&cfg);
+    println!();
+    println!("check it: landlined doctor");
+    Ok(())
+}
+
+/// Restart a running service so it rereads its config. `Ok(false)` means
+/// this platform has no restart to offer and the caller should say so.
+pub fn restart() -> Result<bool> {
+    platform_restart()
 }
 
 pub fn uninstall() -> Result<()> {
@@ -19,15 +35,26 @@ pub fn uninstall() -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-use launchd::{install as platform_install, uninstall as platform_uninstall};
+use launchd::{
+    install as platform_install, restart as platform_restart, uninstall as platform_uninstall,
+};
 #[cfg(target_os = "linux")]
-use systemd::{install as platform_install, uninstall as platform_uninstall};
+use systemd::{
+    install as platform_install, restart as platform_restart, uninstall as platform_uninstall,
+};
 #[cfg(windows)]
-use windows::{install as platform_install, uninstall as platform_uninstall};
+use windows::{
+    install as platform_install, restart as platform_restart, uninstall as platform_uninstall,
+};
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn platform_install() -> Result<()> {
     anyhow::bail!("service installation is not supported on this platform")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn platform_restart() -> Result<bool> {
+    Ok(false)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]

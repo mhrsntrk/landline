@@ -141,7 +141,7 @@ esac
 
 say ""
 say "Next steps:"
-say "  landlined install                                        # launchd / systemd / scheduled task"
-say "  tailscale serve --bg --https=443 http://127.0.0.1:7777"
+say "  landlined install    # starts at login, allows your tailnet login, turns on tailscale serve"
+say "  landlined doctor     # checks every step and prints the address for the app"
 say ""
 say "Then add this machine's ts.net hostname (e.g. macbook.<tailnet>.ts.net) in the iOS app."

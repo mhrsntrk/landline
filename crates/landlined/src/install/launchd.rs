@@ -90,6 +90,17 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
+/// Restart the agent so it rereads its config. `kickstart -k` keeps the
+/// loaded plist, which is right here: only the config changed, not the plist.
+pub fn restart() -> Result<bool> {
+    if !plist_path()?.exists() {
+        return Ok(false);
+    }
+    let service = format!("gui/{}/{LABEL}", uid()?);
+    super::run_checked("launchctl", &["kickstart", "-k", &service])?;
+    Ok(true)
+}
+
 pub fn uninstall() -> Result<()> {
     let plist_path = plist_path()?;
     let plist_str = plist_path.display().to_string();

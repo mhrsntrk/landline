@@ -182,6 +182,12 @@ def main() -> int:
         for locale in LOCALES:
             out_dir = ROOT / locale / slot
             out_dir.mkdir(parents=True, exist_ok=True)
+            # Gallery order is the alphabetical order of the composed files, and
+            # `out` lets a frame move without renaming its raw capture. Clear the
+            # old stills first or a renamed frame leaves its previous name behind
+            # and gets uploaded twice. Previews (.mp4) share the folder; keep them.
+            for stale in out_dir.glob("*.png"):
+                stale.unlink()
             for frame in frames:
                 src = ROOT / "raw" / device / frame["file"]
                 if not src.exists():
@@ -190,7 +196,7 @@ def main() -> int:
                 capture = Image.open(src).convert("RGB")
                 image = compose(capture, frame["label"], frame[locale], locale,
                                 width, height)
-                dest = out_dir / frame["file"]
+                dest = out_dir / frame.get("out", frame["file"])
                 image.save(dest)
                 print(f"{dest.relative_to(ROOT)}  {image.width}x{image.height}")
     return 0
