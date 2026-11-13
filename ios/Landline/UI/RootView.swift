@@ -36,16 +36,30 @@ struct RootView: View {
     /// change: someone who collapsed the index to give the terminal the whole
     /// screen wants it collapsed next launch too.
     @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var hinge = HingeObserver()
 
     var body: some View {
         // Measured rather than inferred: the size class alone cannot tell a
-        // 669pt regular window from a 1032pt one.
+        // 669pt regular window from a 1032pt one. The rule reads the full
+        // window, safe areas added back, because the crease is a property of
+        // the glass: the midline of a safe-area-inset frame is not where the
+        // fold is. The reader itself keeps the safe area, so every page still
+        // clears the status bar and the home indicator.
         GeometryReader { proxy in
-            content(NavigationMode(horizontalSizeClass, width: proxy.size.width))
+            let insets = proxy.safeAreaInsets
+            let window = CGSize(width: proxy.size.width + insets.leading + insets.trailing,
+                                height: proxy.size.height + insets.top + insets.bottom)
+            content(NavigationMode(horizontalSizeClass,
+                                   width: window.width,
+                                   height: window.height,
+                                   hinge: hinge.posture,
+                                   fillsScreen: hinge.windowFillsScreen),
+                    insets: insets)
         }
+        .background(HingeProbe(observer: hinge).accessibilityHidden(true))
     }
 
-    private func content(_ mode: NavigationMode) -> some View {
+    private func content(_ mode: NavigationMode, insets: EdgeInsets) -> some View {
         // A window that grows from Slide Over to full screen swaps one whole
         // hierarchy for the other, which tears the terminal down and stands a
         // new one up. That is a detach and a reattach, never a kill: the session
@@ -57,6 +71,8 @@ struct RootView: View {
                 NavigationStack { HostListView() }
             case .split:
                 split
+            case .folio(let folio):
+                pages(folio, insets: insets)
             }
         }
         .preferredColorScheme(.dark)
@@ -90,45 +106,73 @@ struct RootView: View {
         // .balanced rather than .prominentDetail: the index is not an overlay
         // that dims the terminal, it is the other half of the drawing.
         .navigationSplitViewStyle(.balanced)
-        .sheet(isPresented: $showingSettings) {
-            // A sheet, not the detail pane. The detail pane is where the session
-            // is, and the app-wide settings are the ones that change how the
-            // terminal behaves under your thumb (the key bar, the scroll speed),
-            // so taking the terminal away to set them is exactly backwards.
-            // Closing puts you back on a session that never stopped.
-            NavigationStack {
-                SettingsView(leading: .close)
+        .withSplitBehaviour(self)
+    }
+
+    // MARK: - Folio
+    //
+    // Two pages this app lays out itself, for a window on a fold. Not
+    // `NavigationSplitView`: it cannot be told where to put its seam, and below
+    // 700pt it stops drawing a split at all and floats the index over the
+    // terminal. Here the seam goes exactly where the folio says, which on a
+    // half-open device is the crease, so no row of the terminal and no row of
+    // the index is ever drawn across the fold.
+    //
+    // The index page is the same sidebar the system split uses, in its own
+    // stack so its session list can still push. The terminal's index toggle
+    // works unchanged: it writes `columnVisibility`, and a hidden index gives
+    // the terminal the whole window.
+
+    @ViewBuilder
+    private func pages(_ folio: Folio, insets: EdgeInsets) -> some View {
+        let indexShown = columnVisibility != .detailOnly
+        Group {
+            switch folio.axis {
+            case .sideBySide:
+                HStack(spacing: 0) {
+                    if indexShown {
+                        // `indexLength` is measured from the window's edge;
+                        // this frame starts at the safe area's.
+                        indexPage
+                            .frame(width: max(0, folio.indexLength - insets.leading))
+                            .overlay(alignment: .trailing) { Seam(axis: .vertical) }
+                            .transition(.move(edge: .leading))
+                    }
+                    detailPage
+                }
+            case .stacked:
+                VStack(spacing: 0) {
+                    detailPage
+                        .frame(height: indexShown ? max(0, folio.indexLength - insets.top) : nil)
+                    if indexShown {
+                        indexPage
+                            .overlay(alignment: .top) { Seam(axis: .horizontal) }
+                            .transition(.move(edge: .bottom))
+                    }
+                }
+                // Laptop posture: the software keyboard rises over the bottom
+                // page, which is the index. Letting it push the pages up would
+                // slide the terminal down across the crease, so the pages hold
+                // still and the terminal's key bar stays on the top page, just
+                // above the fold.
+                .ignoresSafeArea(.keyboard, edges: indexShown ? .bottom : [])
             }
-            .preferredColorScheme(.dark)
-            .tint(Theme.accent)
-            .presentationBackground(Theme.panel)
-            .presentationCornerRadius(0)
         }
-        // Written back rather than read every frame, so the split view stays the
-        // owner of its own animation and the store only sees the settled value.
-        .onChange(of: columnVisibility) { _, new in
-            settings.setShowsIndexColumn(new != .detailOnly)
+        .background(Theme.ground.ignoresSafeArea())
+        .withSplitBehaviour(self)
+    }
+
+    private var indexPage: some View {
+        NavigationStack {
+            HostListView(selection: $selection, settingsPresented: $showingSettings)
+                .toolbar(.hidden, for: .navigationBar)
         }
-        .task {
-            columnVisibility = settings.showsIndexColumn ? .all : .detailOnly
-            DemoSeed.seedIfRequested(into: store)
-            if DemoSeed.opensTerminal { selection = store.hosts.first?.id }
-            if DemoSeed.opensSettings { showingSettings = true }
-            // Debug screenshot hook. See `DemoSeed.switchesHosts`.
-            if DemoSeed.switchesHosts, store.hosts.count > 1 {
-                try? await Task.sleep(for: .seconds(6))
-                selection = store.hosts[1].id
-                try? await Task.sleep(for: .seconds(5))
-                selection = store.hosts[0].id
-            }
-            // Debug screenshot hook. See `DemoSeed.togglesIndex`.
-            if DemoSeed.togglesIndex {
-                try? await Task.sleep(for: .seconds(6))
-                withAnimation(Theme.Motion.state) { columnVisibility = .detailOnly }
-                try? await Task.sleep(for: .seconds(8))
-                withAnimation(Theme.Motion.state) { columnVisibility = .all }
-            }
-        }
+    }
+
+    private var detailPage: some View {
+        detail
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.panel.ignoresSafeArea())
     }
 
     @ViewBuilder
@@ -150,31 +194,81 @@ struct RootView: View {
 
 /// The shape the app is in. A named value rather than a size-class comparison
 /// scattered through the views, so the rule is stated once and can be tested.
-enum NavigationMode: String, Equatable {
+enum NavigationMode: Equatable {
     /// A pushed stack. Compact width, whatever the device is.
     case stack
     /// A persistent index beside the terminal. Regular width.
     case split
+    /// Two pages laid out by this app rather than by `NavigationSplitView`,
+    /// for a window on a fold. See `Folio`.
+    case folio(Folio)
 
     /// The narrowest window that gets the split. Below it SwiftUI overlays
     /// the index on the terminal instead of setting them side by side. 700pt
-    /// sends iPhone Duo open in portrait (669pt) to the stack and keeps every
-    /// iPad full-screen window, iPad mini's 744pt portrait included, on the
-    /// split it already had.
+    /// sends iPhone Duo open in portrait (669pt) away from the split and keeps
+    /// every iPad full-screen window, iPad mini's 744pt portrait included, on
+    /// the split it already had.
     static let minimumSplitWidth: CGFloat = 700
 
-    init(_ horizontalSizeClass: UserInterfaceSizeClass?, width: CGFloat? = nil) {
+    /// The index column when the app draws the split itself in a narrow
+    /// window. Narrower than the system split's 300pt so the terminal keeps
+    /// about fifty columns at 13pt beside it on a 669pt window.
+    static let narrowIndexWidth: CGFloat = 272
+
+    /// - Parameters:
+    ///   - hinge: the fold's posture, `nil` on hardware without one.
+    ///   - fillsScreen: whether the window covers its screen, which is what
+    ///     puts the crease on the window's midline.
+    init(_ horizontalSizeClass: UserInterfaceSizeClass?,
+         width: CGFloat? = nil,
+         height: CGFloat? = nil,
+         hinge: HingePosture? = nil,
+         fillsScreen: Bool = false) {
         // nil is the state SwiftUI reports before a window has been measured.
         // Compact is the safe answer: a stack laid out in a wide window looks
         // sparse for one frame, a split laid out in a narrow one has no room
         // for either column.
         guard horizontalSizeClass == .regular else { self = .stack; return }
+
+        // Half open and filling the inner display: the crease is a physical
+        // edge across the middle of the window, and nothing should sit on it.
+        // The index takes one page and the terminal the other.
+        if hinge == .partial, fillsScreen, let width, let height {
+            self = .folio(width >= height
+                ? Folio(axis: .sideBySide, indexLength: width / 2)
+                : Folio(axis: .stacked, indexLength: height / 2))
+            return
+        }
+
         if let width, width < Self.minimumSplitWidth {
-            self = .stack
+            // A hinged device open flat in portrait has the room for an index
+            // beside the terminal; SwiftUI's split just will not draw one
+            // there. Anything else this narrow keeps the stack.
+            self = hinge == nil || hinge == .closed
+                ? .stack
+                : .folio(Folio(axis: .sideBySide, indexLength: Self.narrowIndexWidth))
         } else {
             self = .split
         }
     }
+}
+
+/// How two pages share a window.
+struct Folio: Equatable {
+    enum Axis: Equatable {
+        /// Index on the leading page, terminal on the trailing one.
+        case sideBySide
+        /// Terminal on the top page, index on the bottom one: laptop posture,
+        /// where the bottom page lies flat under your thumbs like a keyboard
+        /// deck and the top page stands up facing you.
+        case stacked
+    }
+
+    let axis: Axis
+    /// The index page's width for `.sideBySide`, the terminal page's height
+    /// for `.stacked`. In both cases, half the window puts the seam on the
+    /// crease.
+    let indexLength: CGFloat
 }
 
 // MARK: - Detail placeholder
@@ -328,5 +422,78 @@ struct DetailPlaceholderView: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, Theme.Metric.grid * 4)
+    }
+}
+
+// MARK: - Behaviour shared by both two-pane shapes
+
+extension View {
+    /// The settings sheet, the remembered index preference and the demo hooks,
+    /// which the system split and the folio both need.
+    fileprivate func withSplitBehaviour(_ root: RootView) -> some View {
+        root.splitBehaviour(self)
+    }
+}
+
+extension RootView {
+    fileprivate func splitBehaviour<Content: View>(_ content: Content) -> some View {
+        content
+            .sheet(isPresented: $showingSettings) {
+                // A sheet, not the detail pane. The detail pane is where the session
+                // is, and the app-wide settings are the ones that change how the
+                // terminal behaves under your thumb (the key bar, the scroll speed),
+                // so taking the terminal away to set them is exactly backwards.
+                // Closing puts you back on a session that never stopped.
+                NavigationStack {
+                    SettingsView(leading: .close)
+                }
+                .preferredColorScheme(.dark)
+                .tint(Theme.accent)
+                .presentationBackground(Theme.panel)
+                .presentationCornerRadius(0)
+            }
+            // Written back rather than read every frame, so the split view stays the
+            // owner of its own animation and the store only sees the settled value.
+            .onChange(of: columnVisibility) { _, new in
+                settings.setShowsIndexColumn(new != .detailOnly)
+            }
+            .task {
+                columnVisibility = settings.showsIndexColumn ? .all : .detailOnly
+                DemoSeed.seedIfRequested(into: store)
+                if DemoSeed.opensTerminal { selection = store.hosts.first?.id }
+                if DemoSeed.opensSettings { showingSettings = true }
+                // Debug screenshot hook. See `DemoSeed.switchesHosts`.
+                if DemoSeed.switchesHosts, store.hosts.count > 1 {
+                    try? await Task.sleep(for: .seconds(6))
+                    selection = store.hosts[1].id
+                    try? await Task.sleep(for: .seconds(5))
+                    selection = store.hosts[0].id
+                }
+                // Debug screenshot hook. See `DemoSeed.togglesIndex`.
+                if DemoSeed.togglesIndex {
+                    try? await Task.sleep(for: .seconds(6))
+                    withAnimation(Theme.Motion.state) { columnVisibility = .detailOnly }
+                    try? await Task.sleep(for: .seconds(8))
+                    withAnimation(Theme.Motion.state) { columnVisibility = .all }
+                }
+            }
+    }
+}
+
+/// The rule drawn on a folio's seam. A hairline in `rule`, like every other
+/// division in this app: the crease is already a visible edge on the glass,
+/// and the drawing should agree with it rather than decorate it.
+private struct Seam: View {
+    enum Axis { case horizontal, vertical }
+    let axis: Axis
+    @Environment(\.displayScale) private var displayScale
+
+    var body: some View {
+        Rectangle()
+            .fill(Theme.rule)
+            .frame(width: axis == .vertical ? 1 / displayScale : nil,
+                   height: axis == .horizontal ? 1 / displayScale : nil)
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
     }
 }
