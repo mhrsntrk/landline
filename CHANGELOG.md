@@ -26,6 +26,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - iOS 1.3: first-run setup is three commands, with a button that sends the whole setup to the
   computer through the share sheet. The NOT ALLOWED advice names `landlined allow`. App Store
   listing in eight more languages; the app itself stays English.
+- iOS 1.3 on iPhone Duo: the app reads the hinge (`UIHingeInteraction`, iOS 27.1). Half open,
+  the index and the terminal each take one page and the seam sits on the crease: side by side in
+  landscape, terminal above and index below in laptop posture, where the keyboard rises over the
+  index page instead of pushing the terminal across the fold. Open flat in portrait (669pt), the
+  index now sits beside the terminal in a 272pt column instead of the app falling back to the stack.
 
 - iOS 1.2: built with the iOS 27.1 SDK for iPhone Duo, edge to edge on both displays.
   A regular-width window narrower than 700pt, which is iPhone Duo open in portrait, now
