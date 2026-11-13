@@ -270,7 +270,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14         # arm64, Sonoma: covers Sonoma and newer
+          # macos-14 was retired: its jobs cancel in a second with no steps.
+          - runner: macos-15         # arm64, Sequoia: covers Sequoia and newer
           - runner: macos-15-intel   # x86_64: covers that OS and newer
     runs-on: ${{ matrix.runner }}
     steps:
@@ -306,7 +307,7 @@ jobs:
   # formula, so the tap and the release agree in one step rather than by hand.
   bottle-publish:
     needs: bottle
-    runs-on: macos-14
+    runs-on: macos-15
     # Uploads the bottles onto the release. Without this the job inherits the
     # read-only default and 403s at the upload, after having built everything.
     permissions:
