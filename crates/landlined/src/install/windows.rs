@@ -29,6 +29,14 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
+/// Restart the scheduled task so the daemon rereads its config. `/End` fails
+/// when the task is not running, which is fine: `/Run` starts it either way.
+pub fn restart() -> Result<bool> {
+    let _ = super::run_checked("schtasks", &["/End", "/TN", TASK_NAME]);
+    super::run_checked("schtasks", &["/Run", "/TN", TASK_NAME])?;
+    Ok(true)
+}
+
 pub fn uninstall() -> Result<()> {
     super::run_checked("schtasks", &["/Delete", "/TN", TASK_NAME, "/F"])?;
     println!("removed scheduled task {TASK_NAME}");

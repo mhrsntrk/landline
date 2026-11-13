@@ -7,7 +7,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-13
+
+### Changed
+
+- `landlined install` now finishes the setup instead of leaving two steps to the reader. It
+  allows the tailnet login that owns the machine when `allowed_logins` is empty (never on a tagged
+  node, never over a list someone wrote), and runs `tailscale serve --bg --https=443` when the
+  machine serves nothing yet (never over an existing serve config). Whatever it cannot do, it prints
+  the command for. The allowlist step was missing from the app, the Homebrew caveats and
+  `install.sh`, so following any of them exactly ended at a 403.
+- `doctor` names `landlined allow` as the fix for an empty allowlist.
+
 ### Added
+
+- `landlined allow [login]` adds a login to the allowlist, defaulting to this machine's owner, and
+  restarts the running service so it takes effect.
+- iOS 1.3: first-run setup is three commands, with a button that sends the whole setup to the
+  computer through the share sheet. The NOT ALLOWED advice names `landlined allow`. App Store
+  listing in eight more languages; the app itself stays English.
 
 - iOS 1.2: built with the iOS 27.1 SDK for iPhone Duo, edge to edge on both displays.
   A regular-width window narrower than 700pt, which is iPhone Duo open in portrait, now

@@ -51,20 +51,26 @@ Writes a launchd agent on macOS, a systemd user unit on Linux, or a logon
 scheduled task on Windows. On a headless Linux box also run
 `loginctl enable-linger $USER`, or the unit will not start until someone logs in.
 
+From 0.4.0 `install` also does the next two steps when it safely can, and
+prints what it did. Read its output rather than assuming.
+
 ## 3. Allow the user's tailnet identity
 
-The daemon **fails closed**: an empty `allowed_logins` rejects everyone, which is
-the correct default but means the daemon does nothing until you edit it.
+The daemon **fails closed**: an empty `allowed_logins` rejects everyone.
+`install` fills an empty list with the login that owns this machine in
+`tailscale status`. It refuses on a tagged node, which has no owner login, and
+never edits a list someone already wrote. To allow a login yourself:
 
-Find the config with `landlined config-path`, and set the login to the one
-`tailscale status` shows for this user:
-
-```toml
-listen         = "127.0.0.1:7777"
-allowed_logins = ["them@example.com"]
+```sh
+landlined allow                      # this machine's owner
+landlined allow them@example.com     # anyone else; restarts the daemon
 ```
 
 ## 4. Put Tailscale in front of it
+
+`install` runs this when the machine serves nothing yet. It never replaces an
+existing serve config, since 443 may front something else. On Linux it often
+needs `sudo` unless `tailscale set --operator=$USER` was run once:
 
 ```sh
 tailscale serve --bg --https=443 http://127.0.0.1:7777

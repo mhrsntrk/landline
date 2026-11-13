@@ -65,10 +65,9 @@ __BOTTLE_BLOCK__
   # only shows up when someone actually installs the formula.
   def caveats
     <<~EOS
-      Start the daemon and expose it on your tailnet:
+      Start the daemon, allow your tailnet login and turn on tailscale serve:
 
         landlined install
-        tailscale serve --bg --https=443 http://127.0.0.1:7777
 
       Then add this machine's ts.net hostname in the iOS app.
 

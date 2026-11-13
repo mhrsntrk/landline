@@ -57,6 +57,15 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
+/// Restart the unit so it rereads its config.
+pub fn restart() -> Result<bool> {
+    if !unit_path()?.exists() {
+        return Ok(false);
+    }
+    super::run_checked("systemctl", &["--user", "restart", UNIT])?;
+    Ok(true)
+}
+
 pub fn uninstall() -> Result<()> {
     if let Err(err) = super::run_checked("systemctl", &["--user", "disable", "--now", "landlined"])
     {

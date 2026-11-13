@@ -902,7 +902,7 @@ struct TerminalScreen: View {
         case ErrCode.sessionReplaced:
             return "Another client attached to this session, so this one was dropped. Reconnect to take it back."
         case ErrCode.unauthorized:
-            return "The daemon did not recognise your tailnet login. Check `allowed_logins` in its config.toml."
+            return "The daemon did not recognise your tailnet login. On that machine run `landlined allow` with the login this phone uses."
         case ErrCode.lockedOut:
             return "Too many wrong unlock secrets. The daemon is refusing attempts until its cooling period ends."
         case ErrCode.tooManySessions:
