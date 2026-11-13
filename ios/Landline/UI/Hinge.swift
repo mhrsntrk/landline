@@ -69,12 +69,17 @@ struct HingeProbe: UIViewRepresentable {
         view.observer = observer
         view.isUserInteractionEnabled = false
         view.isAccessibilityElement = false
+        // `UIHinge` exists only in the iOS 27.1 SDK and later. Older Xcodes
+        // (CI runs 26.x) compile the app without it, which on a hinge device
+        // simply means the flat layouts. Release builds use Xcode 27.
+        #if compiler(>=6.4)
         if #available(iOS 27.1, *) {
             let interaction = UIHingeInteraction { [weak observer] _, update in
                 observer?.update(Self.posture(update.hinge))
             }
             view.addInteraction(interaction)
         }
+        #endif
         return view
     }
 
@@ -82,6 +87,7 @@ struct HingeProbe: UIViewRepresentable {
         view.reportFill()
     }
 
+    #if compiler(>=6.4)
     @available(iOS 27.1, *)
     static func posture(_ hinge: UIHinge?) -> HingePosture? {
         guard let hinge else { return nil }
@@ -92,6 +98,7 @@ struct HingeProbe: UIViewRepresentable {
         default: return nil
         }
     }
+    #endif
 
     final class ProbeView: UIView {
         weak var observer: HingeObserver?
