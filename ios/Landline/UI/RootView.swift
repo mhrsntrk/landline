@@ -185,7 +185,12 @@ struct RootView: View {
                 .id(host.id)
         } else {
             DetailPlaceholderView(hasHosts: !store.hosts.isEmpty,
-                                  indexColumn: $columnVisibility)
+                                  indexColumn: $columnVisibility) { host in
+                // The guide found a daemon: save it and show its terminal,
+                // which is where the trial offer appears.
+                store.add(host)
+                selection = host.id
+            }
         }
     }
 }
@@ -292,6 +297,7 @@ struct DetailPlaceholderView: View {
     /// normally lives — is not on screen at all. Without this the app would open
     /// on a pane with no way out of it.
     var indexColumn: Binding<NavigationSplitViewVisibility>?
+    var onFound: (Host) -> Void = { _ in }
 
     private var indexIsHidden: Bool { indexColumn?.wrappedValue == .detailOnly }
 
@@ -382,25 +388,11 @@ struct DetailPlaceholderView: View {
     }
 
     private var setup: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Hairline().padding(.top, Theme.Metric.grid * 6)
-            ForEach(HostSetup.steps, id: \.label) { setupStep in
-                step(label: setupStep.label, command: setupStep.command, text: setupStep.note)
-                Hairline()
-            }
-            ShareLink(item: HostSetup.shareText) {
-                Text("SEND SETUP TO YOUR COMPUTER")
-            }
-            .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
-            .padding(.vertical, Theme.Metric.grid * 4)
-            Hairline()
-            step(label: "04",
-                 text: "Add the machine with + HOST in the index, using the tailnet name `landlined doctor` prints.")
-            Hairline()
-        }
+        SetupGuideView(onFound: onFound)
+            .padding(.top, Theme.Metric.grid * 6)
     }
 
-    private func step(label: String, command: String? = nil, text: String) -> some View {
+    private func step(label: String, text: String) -> some View {
         HStack(alignment: .top, spacing: Theme.Metric.grid * 4) {
             MicroLabel(label, color: Theme.accent)
                 // A measured label column, so the sentences all start on the
@@ -409,12 +401,6 @@ struct DetailPlaceholderView: View {
                 .llMeasuredColumn()
                 .padding(.top, 3)
             VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
-                if let command {
-                    Text(command)
-                        .llValue(Theme.inkBright)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 proseText(text)
                     .llProse()
                     .fixedSize(horizontal: false, vertical: true)

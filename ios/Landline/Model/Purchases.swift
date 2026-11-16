@@ -130,10 +130,42 @@ final class Purchases {
     @ObservationIgnored private let client: any PurchaseClient
     @ObservationIgnored private var updates: Task<Void, Never>?
     @ObservationIgnored private var refreshRevision = 0
+    @ObservationIgnored private let reminders: any TrialReminderScheduler
+    @ObservationIgnored private let defaults: UserDefaults
 
-    init(access: LandlineAccess, client: (any PurchaseClient)? = nil) {
+    /// The in-app opt-out for the two trial reminders. On by default; the
+    /// system permission prompt is the opt-in.
+    var remindersEnabled: Bool {
+        didSet {
+            defaults.set(remindersEnabled, forKey: TrialReminders.defaultsKey)
+            Task {
+                if remindersEnabled { await askForReminderPermission() } else { await syncReminders() }
+            }
+        }
+    }
+    /// False once iOS has said no, so the toggle can say why nothing arrives.
+    private(set) var remindersAllowedBySystem = true
+
+    /// Prompts only the first time; afterwards it reads the answer back.
+    /// Reschedules afterwards: anything planned before permission existed
+    /// was refused by the notification center.
+    func askForReminderPermission() async {
+        remindersAllowedBySystem = await reminders.requestAuthorization()
+        await syncReminders()
+    }
+
+    init(access: LandlineAccess,
+         client: (any PurchaseClient)? = nil,
+         reminders: (any TrialReminderScheduler)? = nil,
+         defaults: UserDefaults = .standard) {
         self.access = access
+        // Only the production client gets real notifications. A test that
+        // injects its own client never touches the notification center.
+        self.reminders = reminders ?? (client == nil
+            ? NotificationTrialReminderScheduler() : RecordingTrialReminderScheduler())
         self.client = client ?? StoreKitPurchaseClient()
+        self.defaults = defaults
+        self.remindersEnabled = defaults.object(forKey: TrialReminders.defaultsKey) as? Bool ?? true
     }
 
     var unlockProduct: PurchaseProduct? { products.first { $0.id == LandlineProducts.unlock } }
@@ -165,6 +197,7 @@ final class Purchases {
             guard revision == refreshRevision, !Task.isCancelled else { return false }
             access.update(entitlements)
             message = nil
+            await syncReminders()
             return true
         } catch {
             guard revision == refreshRevision, !Task.isCancelled else { return false }
@@ -183,6 +216,8 @@ final class Purchases {
             if unlockProduct == nil {
                 message = PurchaseFailure.unavailable.localizedDescription
             }
+            // The reminder copy names the local price, which only arrives here.
+            await syncReminders()
         } catch { message = error.localizedDescription }
     }
 
@@ -204,12 +239,32 @@ final class Purchases {
         do {
             switch try await client.purchase(id) {
             case .purchased:
+                // Permission is asked right after the trial starts, the moment
+                // the reminders become worth having. `refresh` then schedules them.
+                if id == LandlineProducts.trial, remindersEnabled {
+                    await askForReminderPermission()
+                }
                 if await refresh(), access.hasFullAccess() { message = "Landline is ready. Every feature is unlocked." }
             case .pending:
                 message = "Waiting for App Store approval. Landline will unlock when the purchase is approved."
             case .cancelled: break
             }
         } catch { message = error.localizedDescription }
+    }
+
+    /// Schedules or clears the trial reminders from verified state only.
+    /// `.checking` and failed refreshes never reach here, so a transient
+    /// StoreKit error cannot cancel a reminder the user still needs.
+    func syncReminders(now: Date = .now) async {
+        switch access.status(at: now) {
+        case .checking:
+            return
+        case .trial(let end) where remindersEnabled:
+            await reminders.replace(with: TrialReminders.plan(
+                trialEnd: end, now: now, price: unlockProduct?.displayPrice))
+        default:
+            reminders.cancelAll()
+        }
     }
 
     func restore() async {
@@ -230,3 +285,36 @@ final class Purchases {
         } catch { message = error.localizedDescription }
     }
 }
+
+#if DEBUG
+/// Debug hook: a fixed purchase state, so the paywall and the countdown can be
+/// looked at on a simulator with no App Store account.
+/// `LANDLINE_DEMO_ACCESS=available|trial|expired`, with
+/// `LANDLINE_DEMO_TRIAL_HOURS_LEFT` for the trial (default 48).
+@MainActor final class DemoPurchaseClient: PurchaseClient {
+    private let state: String
+    private let hoursLeft: Double
+
+    init?(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        guard let state = environment["LANDLINE_DEMO_ACCESS"] else { return nil }
+        self.state = state
+        hoursLeft = environment["LANDLINE_DEMO_TRIAL_HOURS_LEFT"].flatMap(Double.init) ?? 48
+    }
+
+    func products() async throws -> [PurchaseProduct] {
+        [.init(id: LandlineProducts.trial, displayPrice: "$0.00", price: 0),
+         .init(id: LandlineProducts.unlock, displayPrice: "$2.99", price: 2.99)]
+    }
+    func entitlements() async throws -> PurchaseEntitlements {
+        let length = LandlineProducts.trialDuration
+        switch state {
+        case "trial": return .init(trialStartedAt: Date().addingTimeInterval(hoursLeft * 3600 - length))
+        case "expired": return .init(trialStartedAt: Date().addingTimeInterval(-length - 3600))
+        default: return .init()
+        }
+    }
+    func purchase(_ id: String) async throws -> PurchaseOutcome { .cancelled }
+    func restore() async throws {}
+    func listenForUpdates(_ receive: @escaping @MainActor () async -> Void) -> Task<Void, Never> { Task {} }
+}
+#endif

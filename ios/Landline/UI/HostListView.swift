@@ -46,16 +46,30 @@ struct HostListView: View {
 
     private enum SettingsRoute: String, Hashable { case settings }
 
+    /// What tapping the banner does, with the price once the App Store has
+    /// sent it. A countdown with no way to act on it is only a warning.
+    private func bannerAction(_ status: AccessStatus) -> String {
+        switch status {
+        case .trial, .expired:
+            if let price = purchases.unlockProduct?.displayPrice { return "UNLOCK \(price) ›" }
+            return "UNLOCK ›"
+        default:
+            return "TRIAL & PURCHASE ›"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
-            TimelineView(.periodic(from: .now, by: 30)) { _ in
-                if purchases.access.status() != .unlocked {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                let status = purchases.access.status(at: context.date)
+                if status != .unlocked {
                     Button { showingPurchase = true } label: {
                         HStack {
-                            MicroLabel(purchases.access.status().label, color: Theme.accent)
+                            MicroLabel(status.bannerLabel(now: context.date),
+                                       color: status == .expired ? Theme.warn : Theme.accent)
                             Spacer()
-                            Text("TRIAL & PURCHASE ›").llValue(Theme.accent)
+                            Text(bannerAction(status)).llValue(Theme.accent)
                         }
                         .padding(.horizontal, Theme.Metric.gutter)
                         .frame(minHeight: Theme.Metric.rowHeight)
@@ -69,7 +83,11 @@ struct HostListView: View {
                 // In the split the detail pane is already teaching the
                 // mechanism at a readable measure, so the 300pt column does not
                 // print the same two shell commands a second time in a ribbon.
-                EmptyIndexView(dense: isSidebar) { showingAddSheet = true }
+                EmptyIndexView(dense: isSidebar, addHost: { showingAddSheet = true }) { host in
+                    store.add(host)
+                    reachability.probe([host])
+                    reveal(host)
+                }
             } else {
                 index
             }
@@ -116,6 +134,13 @@ struct HostListView: View {
             }
         }
         .navigationDestination(item: $settingsRoute) { _ in SettingsView() }
+        // A host can arrive from outside this view: the iPad's setup pane adds
+        // it straight to the store. Probe whatever is new, or the index shows
+        // a machine that just answered as unreachable.
+        .onChange(of: store.hosts.map(\.id)) { old, new in
+            let added = Set(new).subtracting(old)
+            reachability.probe(store.hosts.filter { added.contains($0.id) })
+        }
         .alert("Face ID could not unlock this host", isPresented: .init(
             get: { authError != nil },
             set: { if !$0 { authError = nil } }
@@ -128,6 +153,7 @@ struct HostListView: View {
             DemoSeed.seedIfRequested(into: store)
             if DemoSeed.opensEditor, let first = store.hosts.first { editingHost = first }
             if DemoSeed.opensSessions, let first = store.hosts.first { sessionsHost = first }
+            if DemoSeed.opensPurchase { showingPurchase = true }
             // The two screenshot hooks that name a *route* are the stack's. In a
             // split view `RootView` drives the same two, because there the
             // destination is the detail pane and the sheet, not a push.
@@ -598,35 +624,26 @@ private struct EmptyIndexView: View {
     /// setup, so this reduces to the one thing the column is for.
     var dense: Bool = false
     let addHost: () -> Void
+    /// The guide found a running daemon: save the host and open it.
+    var onFound: (Host) -> Void = { _ in }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Metric.grid * 5) {
                 MicroLabel("NO HOSTS")
 
-                Text(dense
-                     ? "Nothing in the index yet. The pane beside this one says what has to be running on the machine first."
-                     : "Landline reaches machines you already own, over your own tailnet. Tailscale has to be on this phone and on the machine, signed in to the same tailnet. Then three commands on the machine:")
-                    .llProse()
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if !dense {
-                    fullSetup
-                    // The commands are typed on a different machine, and copying
-                    // them one at a time on a phone is where people gave up. The
-                    // whole setup goes out in one share: AirDrop, Messages or Mail
-                    // to the computer, then paste.
-                    ShareLink(item: HostSetup.shareText) {
-                        Text("SEND SETUP TO YOUR COMPUTER")
-                    }
-                    .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
-                    proseText("Then add the machine's tailnet name, the `\(Host.tailnetExample)` shape that `landlined doctor` prints.")
+                if dense {
+                    Text("Nothing in the index yet. The pane beside this one walks through the setup.")
                         .llProse()
                         .fixedSize(horizontal: false, vertical: true)
+                    Button("+ ADD HOST", action: addHost)
+                        .buttonStyle(InstrumentButtonStyle(emphasis: .primary))
+                } else {
+                    Text("Landline reaches computers you already own, over your own tailnet. Two steps, and the second one finishes by itself.")
+                        .llProse()
+                        .fixedSize(horizontal: false, vertical: true)
+                    SetupGuideView(onFound: onFound, addManually: addHost)
                 }
-
-                Button("+ ADD HOST", action: addHost)
-                    .buttonStyle(InstrumentButtonStyle(emphasis: .primary))
             }
             .padding(.horizontal, Theme.Metric.gutter)
             .padding(.top, Theme.Metric.grid * 6)
@@ -635,86 +652,31 @@ private struct EmptyIndexView: View {
         }
         .background(Theme.ground)
     }
-
-    private var fullSetup: some View {
-        VStack(alignment: .leading, spacing: Theme.Metric.grid * 4) {
-            // The step that used to be missing. Without it the list started at
-            // "run landlined", which is only actionable if you already have it,
-            // and the answer to "where do I get it" was the README of a repo
-            // nobody is holding while they read this.
-            ForEach(Array(HostSetup.steps.enumerated()), id: \.offset) { index, step in
-                if index > 0 { Hairline() }
-                command(step: step.label, text: step.command, note: step.note)
-            }
-        }
-        .padding(.vertical, Theme.Metric.grid * 4)
-        .padding(.horizontal, Theme.Metric.gutter)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.panel)
-        .overlay(alignment: .top) { Hairline() }
-        .overlay(alignment: .bottom) { Hairline() }
-        // Two opposite corners only. Four would read as a frame, and a
-        // frame is a card with the fill removed.
-        .overlay { RegistrationMarks(diagonal: .topLeadingBottomTrailing) }
-        // Cancels the page gutter: a region here is bounded by rules
-        // running edge to edge, never by an inset rectangle.
-        .padding(.horizontal, -Theme.Metric.gutter)
-    }
-
-    private func command(step: String, text: String, note: String) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Metric.grid * 2) {
-                MicroLabel(step, color: Theme.accent)
-                    .llMeasuredColumn()
-                Text(text)
-                    .llValue(Theme.inkBright)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: Theme.Metric.grid)
-                // Selecting text on a phone to copy a shell command is a fiddle
-                // with a magnifier, and this command has to be typed on a
-                // different machine anyway. One tap puts it on the pasteboard,
-                // which is what AirDrop, Handoff and Messages all read.
-                CopyButton(text: text)
-            }
-            proseText(note)
-                .llProse()
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
 }
 
 /// The host-side setup, in one place so the phone index, the iPad detail pane
-/// and the shared text never disagree. Three commands since landlined 0.4.0,
+/// and the shared text never disagree. One line since landlined 0.4.0,
 /// where `install` also allows the owner's login and turns on serve. Before
 /// that the allowlist step was missing from every set of instructions, and a
 /// new user who followed them exactly ended at NOT ALLOWED.
 enum HostSetup {
-    struct Step {
-        let label: String
-        let command: String
-        let note: String
-    }
-
     static let installScript =
         "curl -fsSL https://raw.githubusercontent.com/mhrsntrk/landline/main/packaging/install.sh | sh"
 
-    static let steps: [Step] = [
-        Step(label: "01",
-             command: "brew install mhrsntrk/tap/landline",
-             note: "No Homebrew, or on Linux: the install script in the shared setup. Windows: the releases page."),
-        Step(label: "02",
-             command: "landlined install",
-             note: "Starts the daemon at login, allows your tailnet login, and turns on tailscale serve. Anything it cannot do, it prints the command for."),
-        Step(label: "03",
-             command: "landlined doctor",
-             note: "Checks every step and prints the address to add here."),
-    ]
+    /// The whole host side as one pasteable line. `install` returns once the
+    /// service is loaded; `;` rather than `&&` before `doctor` so a partial
+    /// install still prints what is missing.
+    static let oneLine = "brew install mhrsntrk/tap/landline && landlined install; landlined doctor"
 
     static var shareText: String {
         """
         Landline setup, run on the machine you want to reach.
         Tailscale must be running there, signed in to the same tailnet as your phone.
+
+        With Homebrew (macOS or Linux), paste this one line into a terminal:
+           \(oneLine)
+
+        Step by step, or without Homebrew:
 
         1. Install the daemon (macOS or Linux with Homebrew):
            brew install mhrsntrk/tap/landline
@@ -728,7 +690,8 @@ enum HostSetup {
         3. Check it and get the address for the app:
            landlined doctor
 
-        Then add the hostname from the "app url" line in Landline.
+        Then type the name from the "app url" line into Landline on your phone.
+        The app checks for the machine and opens the terminal by itself.
         Help: https://github.com/mhrsntrk/landline#quickstart
         """
     }
@@ -738,7 +701,7 @@ enum HostSetup {
 ///
 /// It confirms in place rather than with a toast: the label becomes COPIED for
 /// a moment. A copy that says nothing leaves you tapping it again to be sure.
-private struct CopyButton: View {
+struct CopyButton: View {
     let text: String
     @State private var copied = false
 
@@ -803,7 +766,12 @@ final class HostReachability {
     }
 
     private static func probeOne(host: Host, session: URLSession) async -> HostDiagnosis {
-        var request = URLRequest(url: host.httpURL)
+        // `/v1/sessions`, not `/v1/shell`: the shell route's WebSocket
+        // extractor refuses a plain GET with 400 before the login is checked,
+        // so a probe there could never see the 403 below. Sessions checks the
+        // login first: 403 for a login the daemon does not allow, 401 for an
+        // allowed one without a bearer token.
+        var request = URLRequest(url: host.apiURL(path: "/v1/sessions"))
         request.httpMethod = "GET"
         request.timeoutInterval = 4
         do {
@@ -935,6 +903,19 @@ enum DemoSeed {
         return mode != nil && ProcessInfo.processInfo.environment["LANDLINE_DEMO_NOKEYBOARD"] == "1"
         #else
         return false
+        #endif
+    }
+
+    /// Debug screenshot hook: open the trial and purchase sheet.
+    static var opensPurchase: Bool { mode == "purchase" }
+
+    /// Debug hook: type a machine name into the setup guide, since a run has
+    /// no fingers. Exercises the live waiting check against a real daemon.
+    static var setupHostname: String? {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["LANDLINE_DEMO_SETUP_HOST"]
+        #else
+        return nil
         #endif
     }
 

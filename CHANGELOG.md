@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- iOS 1.4: first-run setup finishes itself. One pasteable line installs and starts the daemon;
+  the app then asks the typed machine name every few seconds and opens the terminal as soon as
+  the daemon answers, or shows `landlined allow` when it answers with 403.
+- iOS 1.4: the host list counts down the trial, and two local notifications (48 and 24 hours
+  before the end, local price, switchable on the paywall) remind before it ends. The paywall
+  leads with "One-time purchase. No subscription." and the ended screen has one unlock action.
+
+### Fixed
+
+- iOS: host reachability probed `GET /v1/shell`, which the daemon refuses with 400 before it
+  checks the login, so "login not allowed" could never show. It now probes `GET /v1/sessions`.
+
 ## [0.4.0] - 2026-11-13
 
 ### Changed
