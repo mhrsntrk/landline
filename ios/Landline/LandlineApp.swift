@@ -6,7 +6,14 @@ struct LandlineApp: App {
     /// App-wide settings, alongside the host list. The key bar's layout is one
     /// arrangement for every machine, so it cannot live on a `Host`.
     @State private var settingsStore = SettingsStore()
-    @State private var purchases = Purchases(access: LandlineAccess())
+    @State private var purchases: Purchases = {
+        #if DEBUG
+        if let demo = DemoPurchaseClient() {
+            return Purchases(access: LandlineAccess(), client: demo)
+        }
+        #endif
+        return Purchases(access: LandlineAccess())
+    }()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
