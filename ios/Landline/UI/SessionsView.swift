@@ -77,15 +77,35 @@ struct SessionsView: View {
                     .lineLimit(1)
                 MicroLabel("\(session.shellLabel) / \(session.attached ? "ATTACHED" : "DETACHED")")
                     .llMeasuredColumn()
+                if let attention = session.attention {
+                    MicroLabel("NEEDS YOU / \(Self.idleLabel(attention.secsAgo)) AGO", color: Theme.warn)
+                        .llMeasuredColumn()
+                    if let text = attention.text, !text.isEmpty {
+                        // The program's own words, verbatim: never uppercased.
+                        Text(text)
+                            .llMicroLabel(Theme.ink)
+                            .lineLimit(2)
+                    }
+                }
             }
 
             Spacer(minLength: Theme.Metric.grid)
 
             VStack(alignment: .trailing, spacing: 1) {
-                MicroLabel("IDLE")
-                Text(Self.idleLabel(session.idleSecs))
-                    .llValue(Theme.inkMuted)
-                    .llMeasuredColumn()
+                // A 0.5.0 daemon says when the program last wrote, which is the
+                // question ("still working?"); an older one only knows when a
+                // client last came or went.
+                if let output = session.outputIdleSecs {
+                    MicroLabel("OUTPUT")
+                    Text(session.isActive ? "now" : Self.idleLabel(output))
+                        .llValue(session.isActive ? Theme.ok : Theme.inkMuted)
+                        .llMeasuredColumn()
+                } else {
+                    MicroLabel("IDLE")
+                    Text(Self.idleLabel(session.idleSecs))
+                        .llValue(Theme.inkMuted)
+                        .llMeasuredColumn()
+                }
             }
 
             Button("OPEN") { resume(session.id) }
