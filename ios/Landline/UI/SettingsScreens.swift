@@ -586,8 +586,7 @@ struct KeyBarKeyView: View {
         HStack(spacing: Theme.Metric.grid * 4) {
             VStack(alignment: .leading, spacing: Theme.Metric.grid) {
                 MicroLabel("AS THE TERMINAL WILL DRAW IT")
-                MicroLabel(preview?.icon == nil ? "PRINTS ITS LABEL" : "WEARS AN ICON",
-                           color: Theme.inkDim)
+                MicroLabel(preview?.icon == nil ? "PRINTS ITS LABEL" : "WEARS AN ICON")
             }
             Spacer(minLength: 0)
             Group {
@@ -644,12 +643,11 @@ struct KeyBarKeyView: View {
             HStack(spacing: Theme.Metric.grid * 2) {
                 MicroLabel("ICON")
                 Spacer(minLength: 0)
-                MicroLabel(effectiveIcon == nil ? "NONE" : "TAP AGAIN TO CLEAR",
-                           color: Theme.inkDim)
+                MicroLabel(effectiveIcon == nil ? "NONE" : "TAP AGAIN TO CLEAR")
             }
             ForEach(KeyBarIcon.groups) { group in
                 VStack(alignment: .leading, spacing: Theme.Metric.grid * 2) {
-                    MicroLabel(group.id, color: Theme.inkDim)
+                    MicroLabel(group.id)
                     // Fixed columns rather than adaptive: these are cells on a
                     // grid, and a grid that reflows by a few points per device
                     // stops reading as ruled paper.

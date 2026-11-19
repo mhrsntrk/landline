@@ -131,9 +131,15 @@ does OSC `9;4` (progress). Attaching, or any STDIN from the attached client,
 clears it.
 
 Whether a program sends either signal is up to the program. Claude Code 2.1.326
-at its defaults sent neither in a plain `xterm-256color` PTY; setting its
-`preferredNotifChannel` to `terminal_bell` is the documented way to make it
-ring. Daemons from 0.5.0 serve both fields and list `attention` in `features`;
+at its defaults sent neither in a plain `xterm-256color` PTY, which matches its
+documentation ("Other terminals: nothing"). Its documented switch is
+`"preferredNotifChannel": "terminal_bell"` in `~/.claude/settings.json`.
+
+Inside tmux only the bell arrives. tmux forwards a pane's BEL to its client
+(the default `bell-action any`) but swallows OSC 9 and 777 unless the program
+wraps them for `allow-passthrough`, so under tmux `text` is normally `null`.
+The status line's clock also redraws about once a minute, so
+`output_idle_secs` for a session running tmux rarely grows past that. Daemons from 0.5.0 serve both fields and list `attention` in `features`;
 older ones omit them.
 
 ### `DELETE /v1/sessions/{id}`

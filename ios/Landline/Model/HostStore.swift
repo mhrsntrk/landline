@@ -67,5 +67,8 @@ final class HostStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(hosts) else { return }
         try? data.write(to: fileURL, options: .atomic)
+        // Siri and Spotlight learn the "Open studio" phrases from the current
+        // list, so a rename or a new machine has to be announced.
+        LandlineShortcuts.updateAppShortcutParameters()
     }
 }

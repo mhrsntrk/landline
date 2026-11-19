@@ -173,6 +173,12 @@ struct HostListView: View {
                     Task {
                         try? await Task.sleep(for: .seconds(RatingPrompt.minimumLive + 5))
                         openedHost = nil
+                        // `liveattention` then shows the session list, so the
+                        // NEEDS YOU line and OUTPUT column render real data.
+                        if DemoSeed.seedsLiveHost, let first = store.hosts.first {
+                            try? await Task.sleep(for: .seconds(2))
+                            sessionsHost = first
+                        }
                     }
                 }
                 if DemoSeed.opensSettings { settingsRoute = .settings }

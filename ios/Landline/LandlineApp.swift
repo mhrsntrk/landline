@@ -30,6 +30,7 @@ struct LandlineApp: App {
                 // iOS feels like reclaiming the space.
                 .task {
                     HostAPI.sweepFetchedOffers()
+                    LandlineShortcuts.updateAppShortcutParameters()
                     // Test cases create their own StoreKit sessions and listeners.
                     guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
                     purchases.start()
