@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-19
+
 ### Added
 
 - Daemon: `GET /v1/sessions` reports `output_idle_secs` (seconds since the program last wrote
@@ -183,7 +185,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - iOS app scaffold: SwiftUI, SwiftTerm-based terminal view, host list.
 - Packaging (Homebrew tap, `.deb`) and CI across macOS, Linux, and Windows.
 
-[Unreleased]: https://github.com/mhrsntrk/landline/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/mhrsntrk/landline/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/mhrsntrk/landline/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/mhrsntrk/landline/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mhrsntrk/landline/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mhrsntrk/landline/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mhrsntrk/landline/releases/tag/v0.1.0
