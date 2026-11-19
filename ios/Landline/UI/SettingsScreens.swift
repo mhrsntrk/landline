@@ -394,6 +394,14 @@ struct KeyBarCatalogView: View {
                 HStack(spacing: Theme.Metric.grid * 2) {
                     MicroLabel(group.id, color: Theme.accent)
                     Rectangle().fill(Theme.rule).frame(height: 0.5)
+                    if group.id == "AGENTS" {
+                        Button("ADD ALL") {
+                            settings.appendMissing(catalogIDs: KeyBarCatalog.agentSet)
+                            dismiss()
+                        }
+                        .buttonStyle(InstrumentButtonStyle(emphasis: .secondary))
+                        .accessibilityHint(Text("Adds escape, return, one, two, three, shift tab and control C, skipping any already in the row"))
+                    }
                 }
                 .padding(.top, Theme.Metric.grid * 6)
                 .padding(.bottom, Theme.Metric.grid * 2)

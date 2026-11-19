@@ -199,6 +199,16 @@ final class SettingsStore {
         save()
     }
 
+    /// Appends each catalog key the row does not already carry, in order.
+    /// Running it twice changes nothing. Returns how many were added.
+    @discardableResult
+    func appendMissing(catalogIDs: [String]) -> Int {
+        let present = Set(settings.keyBar.compactMap(\.catalogID))
+        let missing = catalogIDs.filter { !present.contains($0) }
+        for id in missing { append(KeyBarKey(catalogID: id)) }
+        return missing.count
+    }
+
     func remove(id: UUID) {
         settings.keyBar.removeAll { $0.id == id }
         save()

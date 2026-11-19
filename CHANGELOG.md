@@ -20,6 +20,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - iOS 1.5: an Open Machine shortcut for Shortcuts, Spotlight, Siri and the Action button ("Open
   studio in Landline"). It opens the machine through the same path as a tap, so Face ID and the
   trial gate still apply.
+- iOS 1.5: an AGENTS group in the key catalog (RET, 1, 2, 3, shift-tab) and ADD ALL, which
+  appends those plus Esc and ^C to the key bar, skipping any already there.
 - iOS 1.5: after three sessions that each held a live shell for a minute, closing the terminal
   offers the system rating prompt, once per version and only while the trial or unlock is
   active. Screenshot runs never trigger it.

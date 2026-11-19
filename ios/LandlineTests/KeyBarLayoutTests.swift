@@ -444,4 +444,35 @@ final class KeyBarLayoutTests: XCTestCase {
         XCTAssertEqual(store.keyBar.count, KeyBarKey.defaultLayout.count + 1)
         XCTAssertEqual(store.resolvedKeyBar.count, KeyBarKey.defaultLayout.count)
     }
+
+    // MARK: Agent keys
+
+    func testAgentSetIsInTheCatalogAndFitsTheCell() {
+        for id in KeyBarCatalog.agentSet {
+            let entry = KeyBarCatalog.entry(id: id)
+            XCTAssertNotNil(entry, id)
+            XCTAssertLessThanOrEqual(entry?.label.count ?? 99, 4, id)
+            XCTAssertFalse(entry?.repeats ?? true, "no agent key repeats: \(id)")
+        }
+        XCTAssertEqual(KeyBarCatalog.entry(id: "agent.enter")?.action, .send([0x0d]))
+        XCTAssertEqual(KeyBarCatalog.entry(id: "agent.shifttab")?.action, .send([0x1b, 0x5b, 0x5a]))
+    }
+
+    func testAddingTheAgentSetTwiceAddsItOnce() throws {
+        let store = try makeAgentStore()
+        let before = store.keyBar.count
+        let added = store.appendMissing(catalogIDs: KeyBarCatalog.agentSet)
+        // The default row already has esc, so it is skipped.
+        XCTAssertEqual(added, KeyBarCatalog.agentSet.count - 1)
+        XCTAssertEqual(store.keyBar.count, before + added)
+        XCTAssertEqual(store.appendMissing(catalogIDs: KeyBarCatalog.agentSet), 0)
+        XCTAssertEqual(store.keyBar.count, before + added)
+    }
+
+    private func makeAgentStore() throws -> SettingsStore {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agentset-\(UUID().uuidString).json")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return SettingsStore(fileURL: url)
+    }
 }
