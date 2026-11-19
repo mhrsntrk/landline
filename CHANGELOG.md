@@ -17,6 +17,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   notification (daemon 0.5.0), and the session list shows the program's text and how long ago
   it last wrote output. The list only asks hosts whose secret is stored or that were seen to need
   none, so polling never spends an unlock attempt.
+- iOS 1.5: an Open Machine shortcut for Shortcuts, Spotlight, Siri and the Action button ("Open
+  studio in Landline"). It opens the machine through the same path as a tap, so Face ID and the
+  trial gate still apply.
 - iOS 1.5: after three sessions that each held a live shell for a minute, closing the terminal
   offers the system rating prompt, once per version and only while the trial or unlock is
   active. Screenshot runs never trigger it.

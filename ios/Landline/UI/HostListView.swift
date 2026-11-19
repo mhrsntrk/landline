@@ -155,6 +155,10 @@ struct HostListView: View {
             if DemoSeed.opensEditor, let first = store.hosts.first { editingHost = first }
             if DemoSeed.opensSessions, let first = store.hosts.first { sessionsHost = first }
             if DemoSeed.opensPurchase { showingPurchase = true }
+            // Stands in for a Shortcut naming the first machine.
+            if DemoSeed.runsOpenIntent, let first = store.hosts.first {
+                IntentRouter.shared.pendingHostID = first.id
+            }
             // The two screenshot hooks that name a *route* are the stack's. In a
             // split view `RootView` drives the same two, because there the
             // destination is the detail pane and the sheet, not a push.
@@ -187,6 +191,13 @@ struct HostListView: View {
         }
         // Ask a host what is waiting as soon as it is known to answer, rather
         // than on the next 30 second tick.
+        // A Shortcut, Siri or the Action button named a machine. Opened the
+        // way a tap opens it, so its Face ID and the trial gate still apply.
+        .onChange(of: IntentRouter.shared.pendingHostID, initial: true) { _, id in
+            guard let id else { return }
+            IntentRouter.shared.pendingHostID = nil
+            if let host = store.hosts.first(where: { $0.id == id }) { open(host) }
+        }
         .onChange(of: reachability.diagnoses) { old, new in
             let arrived = store.hosts.filter { new[$0.id] == .reachable && old[$0.id] != .reachable }
             if !arrived.isEmpty { refreshActivity(arrived) }
@@ -933,6 +944,9 @@ enum DemoSeed {
     /// `liveattention` does the same against the live demo host, so a bell
     /// rung meanwhile shows up as a badge on the real host list.
     static var closesTerminalAfterAMinute: Bool { mode == "rating" || mode == "liveattention" }
+    /// Debug hook: route the first host through `IntentRouter`, as the Open
+    /// Machine shortcut does, to check the intent path without Shortcuts.
+    static var runsOpenIntent: Bool { mode == "intent" }
     @MainActor static var terminalOpened = false
 
     /// Debug screenshot hook: open the edit sheet straight away, since a
