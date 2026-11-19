@@ -22,7 +22,7 @@ the download and the full unlock. This verification did not change live settings
 | Product | ID | Type | US base price |
 | --- | --- | --- | --- |
 | 7-day Trial | `com.landlineclient.app.trial7days` | Non-consumable | $0.00 |
-| Unlock Landline | `com.landlineclient.app.fullUnlock` | Non-consumable | $2.99 |
+| Unlock Landline | `com.landlineclient.app.fullUnlock` | Non-consumable | $6.99 from 1.5 ($2.99 before) |
 
 Both products have saved English and Korean names/descriptions, availability in
 all 175 existing app territories, automatic availability in future territories,

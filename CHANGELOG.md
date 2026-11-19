@@ -9,12 +9,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- iOS 1.5: after three sessions that each held a live shell for a minute, closing the terminal
+  offers the system rating prompt, once per version and only while the trial or unlock is
+  active. Screenshot runs never trigger it.
 - iOS 1.4: first-run setup finishes itself. One pasteable line installs and starts the daemon;
   the app then asks the typed machine name every few seconds and opens the terminal as soon as
   the daemon answers, or shows `landlined allow` when it answers with 403.
 - iOS 1.4: the host list counts down the trial, and two local notifications (48 and 24 hours
   before the end, local price, switchable on the paywall) remind before it ends. The paywall
   leads with "One-time purchase. No subscription." and the ended screen has one unlock action.
+
+### Changed
+
+- iOS 1.5: the one-time unlock is $6.99 USD (was $2.99). The App Store description no longer
+  states a dollar amount, so it cannot go stale. Listing copy and the first two screenshot
+  captions lead with checking on a build or coding agent from the phone.
 
 ### Fixed
 
