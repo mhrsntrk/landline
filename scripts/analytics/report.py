@@ -40,17 +40,21 @@ def load(prefix):
             continue
         processed = suffix[:10]
         buckets = collections.defaultdict(list)
+        file_header = None
         for row in csv.reader(open(path), delimiter="\t"):
             if not row:
                 continue
             if row[0] in DATE_COLUMNS:
-                header = row
+                file_header = header = row
                 continue
-            buckets[row[0]].append(row)
+            # Apple adds columns over time (Purchases went 18 -> 23 on 2026-11-17),
+            # so keep each row keyed by its own file's header and realign below.
+            buckets[row[0]].append(dict(zip(file_header, row)))
         for date, rows in buckets.items():
             if date not in best or processed > best[date][0]:
                 best[date] = (processed, rows)
-    rows = [row for date in sorted(best) for row in best[date][1]]
+    rows = [[r.get(col, "") for col in header]
+            for date in sorted(best) for r in best[date][1]]
     return header, rows, sorted(best)
 
 
