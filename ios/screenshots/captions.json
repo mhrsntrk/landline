@@ -4,15 +4,15 @@
       "file": "01_session.png",
       "out": "01_session.png",
       "label": "01 / SESSION",
-      "en-US": "A shell on your own machine, over Tailscale. No keys, no open ports.",
-      "ko": "Tailscale로 내 컴퓨터의 셸에 접속. SSH 키도, 포트 개방도 필요 없습니다."
+      "en-US": "Leave a build or a coding agent running. Check on it from your phone.",
+      "ko": "빌드나 코딩 에이전트를 실행해 두고, 휴대폰에서 확인하세요."
     },
     {
       "file": "06_host.png",
       "out": "02_host.png",
       "label": "02 / SETUP",
-      "en-US": "Two commands per machine. Then add it by hostname.",
-      "ko": "컴퓨터마다 명령 두 개로 설치하고, 호스트 이름으로 추가."
+      "en-US": "One line per machine. Then add it by hostname.",
+      "ko": "컴퓨터마다 한 줄로 설치하고, 호스트 이름으로 추가."
     },
     {
       "file": "02_index.png",
@@ -80,15 +80,15 @@
       "file": "01_session.png",
       "out": "01_session.png",
       "label": "01 / SESSION",
-      "en-US": "A shell on your own machine, over Tailscale. No keys, no open ports.",
-      "ko": "Tailscale로 내 컴퓨터의 셸에 접속. SSH 키도, 포트 개방도 필요 없습니다."
+      "en-US": "Leave a build or a coding agent running. Check on it from your phone.",
+      "ko": "빌드나 코딩 에이전트를 실행해 두고, 휴대폰에서 확인하세요."
     },
     {
       "file": "06_host.png",
       "out": "02_host.png",
       "label": "02 / SETUP",
-      "en-US": "Two commands per machine. Then add it by hostname.",
-      "ko": "컴퓨터마다 명령 두 개로 설치하고, 호스트 이름으로 추가."
+      "en-US": "One line per machine. Then add it by hostname.",
+      "ko": "컴퓨터마다 한 줄로 설치하고, 호스트 이름으로 추가."
     },
     {
       "file": "02_index.png",

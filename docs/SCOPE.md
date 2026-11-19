@@ -320,7 +320,7 @@ The authoritative list is the table in `README.md`; this block is here to show t
 **MIT across the whole repo**, agent and iOS client alike.
 
 The App Store model from iOS version 1.1 is a free download, a seven-day full-access
-trial, and an optional $2.99 USD one-time unlock. There is no subscription or automatic
+trial, and an optional one-time unlock ($6.99 USD from iOS 1.5, $2.99 USD before it). There is no subscription or automatic
 charge. Existing App Store users keep full access. The trial begins with an explicit
 free non-consumable purchase; Apple supplies the original date and localized unlock
 price. See `appstore/purchases.md` for the release status and receipt migration.

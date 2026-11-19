@@ -5,7 +5,7 @@
 A fixed, private, direct line to every machine you own. Terminal on your iPhone, over your own tailnet.
 
 **[Get Landline on the App Store](https://apps.apple.com/app/id6808344753)**: free for seven days, then
-$2.99 once. No subscription. The daemon is free and MIT licensed.
+$6.99 once. No subscription. The daemon is free and MIT licensed.
 
 [![ci](https://img.shields.io/github/actions/workflow/status/mhrsntrk/landline/ci.yml?branch=main&label=ci)](https://github.com/mhrsntrk/landline/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -59,7 +59,8 @@ no certificate pinning code anywhere in the client.
 ### Trial and purchase
 
 Version 1.1 introduces a free download and a seven-day trial of every terminal
-feature, followed by an optional **$2.99 USD one-time unlock**. Prices in other
+feature, followed by an optional one-time unlock: **$6.99 USD** from version 1.5, $2.99
+USD before it. Prices in other
 regions come from the App Store. There is no subscription or automatic charge.
 The trial starts when you choose **Start 7-day free trial**, not when you install.
 
