@@ -121,6 +121,16 @@ enum KeyBarCatalog {
             .init(id: "snippet.insert", label: "SNIP", name: "insert a saved snippet",
                   action: .insertSnippet, defaultIcon: KeyBarIcon.snippetDefault),
         ]),
+        // Answering a coding agent from a phone: pick option 1 to 3 of its
+        // menu, confirm, cycle its mode, or stop it. Esc and ^C live in their
+        // own groups too; `agentSet` adds them along with these.
+        Group(id: "AGENTS", entries: [
+            .init(id: "agent.enter", label: "RET", name: "return, confirm", action: .send([0x0d])),
+            .init(id: "agent.1", label: "1", name: "one, first option", action: .send([0x31])),
+            .init(id: "agent.2", label: "2", name: "two, second option", action: .send([0x32])),
+            .init(id: "agent.3", label: "3", name: "three, third option", action: .send([0x33])),
+            .init(id: "agent.shifttab", label: "S-TB", name: "shift tab, cycle mode", action: .send([0x1b, 0x5b, 0x5a])),
+        ]),
         Group(id: "MODIFIERS", entries: [
             .init(id: "ctrl", label: "CTRL", name: "control", action: .latchCtrl),
             .init(id: "alt", label: "ALT", name: "alt", action: .latchAlt),
@@ -241,6 +251,10 @@ enum KeyBarCatalog {
     ]
 
     static let all: [KeyBarCatalogEntry] = groups.flatMap(\.entries)
+
+    /// What "add all" in the AGENTS group appends, in this order.
+    static let agentSet = ["esc", "agent.enter", "agent.1", "agent.2", "agent.3",
+                           "agent.shifttab", "ctrl.c"]
 
     private static let index: [String: KeyBarCatalogEntry] =
         Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
