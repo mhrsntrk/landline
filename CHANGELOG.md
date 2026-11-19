@@ -22,6 +22,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trial gate still apply.
 - iOS 1.5: an AGENTS group in the key catalog (RET, 1, 2, 3, shift-tab) and ADD ALL, which
   appends those plus Esc and ^C to the key bar, skipping any already there.
+- iOS 1.5: text follows the Dynamic Type setting. Every face is sized with `ScaledMetric`; the
+  measured columns, header cells and key bar still cap on purpose and now offer the large content
+  viewer. The terminal view, the host editor's fields and the paywall links gained VoiceOver
+  labels or 44pt hit areas. `Landline Accessibility` runs Apple's accessibility audit over every
+  demo screen.
 - iOS 1.5: after three sessions that each held a live shell for a minute, closing the terminal
   offers the system rating prompt, once per version and only while the trial or unlock is
   active. Screenshot runs never trigger it.

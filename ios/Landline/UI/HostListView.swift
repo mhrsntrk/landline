@@ -228,6 +228,12 @@ struct HostListView: View {
                 Button("+ HOST") { showingAddSheet = true }
                     .buttonStyle(InstrumentButtonStyle(emphasis: .primary))
             }
+            // Title and two bordered controls share one line on the narrowest
+            // phone. Past xxLarge the title truncated and RECHECK broke across
+            // two lines, so the row caps there and the controls offer the
+            // large content viewer instead.
+            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+            .accessibilityShowsLargeContentViewer()
             // The app-wide settings live on the annotation line rather than in
             // the title row. Three bordered controls beside a 20pt title wrap
             // "LANDLINE" onto two lines on the narrowest phone this app
@@ -276,8 +282,8 @@ struct HostListView: View {
             // which would win over the style's and leave the control with no
             // pressed state at all.
             HStack(alignment: .firstTextBaseline, spacing: Theme.Metric.grid) {
-                Text("SETTINGS").font(.llMicroLabel).tracking(0.8)
-                Text("\u{203A}").font(.llValue)
+                Text("SETTINGS").llFont(.micro).tracking(0.8)
+                Text("\u{203A}").llFont(.value)
             }
             .llMeasuredColumn()
             .padding(.vertical, Theme.Metric.grid * 3)

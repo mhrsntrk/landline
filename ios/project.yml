@@ -82,7 +82,29 @@ targets:
         SWIFT_VERSION: "5.9"
         GENERATE_INFOPLIST_FILE: YES
 
+  LandlineUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - LandlineUITests
+    dependencies:
+      - target: Landline
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
+  Landline Accessibility:
+    build:
+      targets:
+        Landline: all
+        LandlineUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - LandlineUITests
   Landline:
     build:
       targets:

@@ -160,27 +160,68 @@ extension Font {
         .monospacedDigit()
 }
 
+/// The five faces, sized for the default text size and scaled from there with
+/// the person's Dynamic Type setting. The `Font.ll…` constants above are the
+/// unscaled values; views take these, through `llFont(_:)`, so text follows
+/// the setting. Where a layout cannot grow (`llMeasuredColumn`, the key bar)
+/// it caps `dynamicTypeSize`, which `ScaledMetric` reads too.
+enum LLFontStyle {
+    case micro, value, valueStrong, title, prose
+
+    fileprivate var spec: (size: CGFloat, textStyle: Font.TextStyle, weight: Font.Weight, design: Font.Design) {
+        switch self {
+        case .micro: (10, .caption2, .medium, .monospaced)
+        case .value: (13, .footnote, .regular, .monospaced)
+        case .valueStrong: (15, .subheadline, .medium, .monospaced)
+        case .title: (20, .title3, .medium, .monospaced)
+        case .prose: (15, .subheadline, .regular, .default)
+        }
+    }
+}
+
+private struct LLFont: ViewModifier {
+    @ScaledMetric private var size: CGFloat
+    private let weight: Font.Weight
+    private let design: Font.Design
+
+    init(_ style: LLFontStyle) {
+        let spec = style.spec
+        _size = ScaledMetric(wrappedValue: spec.size, relativeTo: spec.textStyle)
+        weight = spec.weight
+        design = spec.design
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size, weight: weight, design: design).monospacedDigit())
+    }
+}
+
 extension View {
+    /// One of the five faces, scaled with Dynamic Type.
+    func llFont(_ style: LLFontStyle) -> some View {
+        modifier(LLFont(style))
+    }
+
     /// 10pt mono medium, tracked, `inkMuted` by default. Pair with
     /// `.uppercased()` on the string, or use `MicroLabel`, which does it for you.
     func llMicroLabel(_ color: Color = Theme.inkMuted) -> some View {
-        font(.llMicroLabel).tracking(0.8).foregroundStyle(color)
+        llFont(.micro).tracking(0.8).foregroundStyle(color)
     }
 
     func llValue(_ color: Color = Theme.ink) -> some View {
-        font(.llValue).foregroundStyle(color)
+        llFont(.value).foregroundStyle(color)
     }
 
     func llValueStrong(_ color: Color = Theme.inkBright) -> some View {
-        font(.llValueStrong).foregroundStyle(color)
+        llFont(.valueStrong).foregroundStyle(color)
     }
 
     func llTitle(_ color: Color = Theme.inkBright) -> some View {
-        font(.llTitle).tracking(-0.2).foregroundStyle(color)
+        llFont(.title).tracking(-0.2).foregroundStyle(color)
     }
 
     func llProse(_ color: Color = Theme.ink) -> some View {
-        font(.llProse).foregroundStyle(color)
+        llFont(.prose).foregroundStyle(color)
     }
 
     /// Dense measured columns cannot grow without breaking the alignment grid
@@ -467,7 +508,7 @@ struct InstrumentButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.llMicroLabel)
+                .llFont(.micro)
                 .tracking(0.8)
                 .foregroundStyle(tint)
                 .padding(.horizontal, Theme.Metric.grid * 3)
@@ -532,7 +573,10 @@ struct InstrumentToggle: View {
     private func cell(_ text: String, active: Bool, isPositive: Bool) -> some View {
         Text(text)
             .llMicroLabel(active ? (isPositive ? Theme.ground : Theme.inkBright) : Theme.inkMuted)
-            .frame(width: 40, height: 26)
+            // A minimum, not a size: at large text sizes "OFF" outgrows 40pt
+            // and a fixed frame truncated it to "O…".
+            .padding(.horizontal, Theme.Metric.grid)
+            .frame(minWidth: 40, minHeight: 26)
             .background(active ? (isPositive ? Theme.accent : Theme.raised) : Color.clear)
             .overlay {
                 Rectangle().strokeBorder(Theme.rule, lineWidth: 0.5)
@@ -602,7 +646,7 @@ struct HeaderLeadingCell: View {
         if let label = kind.label {
             Button(action: action) {
                 Text(label)
-                    .font(.llMicroLabel)
+                    .llFont(.micro)
                     .tracking(0.8)
                     .lineLimit(1)
                     // Fixed furniture: the cell may not reflow, or the band's
@@ -615,6 +659,8 @@ struct HeaderLeadingCell: View {
             }
             .buttonStyle(HeaderCellStyle())
             .accessibilityLabel(Text(kind.accessibilityLabel))
+            // Capped above, so a press-and-hold shows the label large instead.
+            .accessibilityShowsLargeContentViewer()
         }
     }
 }
@@ -649,10 +695,10 @@ struct FieldRow<Content: View>: View {
                 }
             }
             content
-                .font(.llValue)
+                .llFont(.value)
                 .foregroundStyle(Theme.inkBright)
                 .tint(Theme.accent)
-                .frame(minHeight: 28)
+                .frame(minHeight: Theme.Metric.hitTarget)
             if let error {
                 // `alert` is 4.38:1 and so is a mark, not a message. Both the
                 // ERR annotation and the sentence are text, so both take
