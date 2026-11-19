@@ -158,7 +158,18 @@ struct HostListView: View {
             // split view `RootView` drives the same two, because there the
             // destination is the detail pane and the sheet, not a push.
             if !isSidebar {
-                if DemoSeed.opensTerminal, let first = store.hosts.first { openedHost = first }
+                if DemoSeed.opensTerminal, !DemoSeed.terminalOpened, let first = store.hosts.first {
+                    openedHost = first
+                    // `.task` runs again whenever the list reappears; a demo
+                    // opens its terminal once, not on every return.
+                    DemoSeed.terminalOpened = DemoSeed.closesTerminalAfterAMinute
+                }
+                if DemoSeed.closesTerminalAfterAMinute, openedHost != nil {
+                    Task {
+                        try? await Task.sleep(for: .seconds(RatingPrompt.minimumLive + 5))
+                        openedHost = nil
+                    }
+                }
                 if DemoSeed.opensSettings { settingsRoute = .settings }
             }
             reachability.probe(store.hosts)
@@ -890,6 +901,15 @@ enum DemoSeed {
         #endif
     }
 
+    /// Any screenshot run. The rating prompt stays out of those, except the
+    /// `rating` run, which exists to exercise it.
+    static var isActive: Bool { mode != nil && mode != "rating" }
+
+    /// Debug hook for checking the rating prompt end to end: open the
+    /// terminal, keep it live past `RatingPrompt.minimumLive`, then go back.
+    static var closesTerminalAfterAMinute: Bool { mode == "rating" }
+    @MainActor static var terminalOpened = false
+
     /// Debug screenshot hook: open the edit sheet straight away, since a
     /// screenshot run has no fingers.
     static var opensEditor: Bool { mode == "edit" || mode == "editbottom" || showsValidation }
@@ -968,7 +988,7 @@ enum DemoSeed {
     /// terminal (optionally with the leader already armed), or on one of the
     /// app-wide settings screens, each of which auto-pushes the next.
     static var opensTerminal: Bool {
-        mode == "terminal" || armsLeader || togglesIndex || seedsLiveHost
+        mode == "terminal" || mode == "rating" || armsLeader || togglesIndex || seedsLiveHost
     }
     /// `liveleader` is `live` with the leader latch already down, so a still can
     /// hold the armed key bar over a session that is genuinely attached rather

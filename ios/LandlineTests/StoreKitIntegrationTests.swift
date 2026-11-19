@@ -75,7 +75,7 @@ import XCTest
         purchases.start()
         defer { purchases.stop() }
         await purchases.reload()
-        XCTAssertEqual(purchases.unlockProduct?.price, Decimal(string: "2.99"))
+        XCTAssertEqual(purchases.unlockProduct?.price, Decimal(string: "6.99"))
         await purchases.unlock()
         XCTAssertEqual(purchases.access.status(), .unlocked, purchases.message ?? "No purchase message")
         let restored = Purchases(access: LandlineAccess())
