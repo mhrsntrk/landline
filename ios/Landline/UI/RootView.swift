@@ -1,3 +1,4 @@
+import StoreKit
 import SwiftUI
 
 // Where the app decides what shape it is.
@@ -37,6 +38,9 @@ struct RootView: View {
     /// screen wants it collapsed next launch too.
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var hinge = HingeObserver()
+    /// Set by `RatingPrompt` when a closed terminal made the app eligible.
+    @AppStorage(RatingPrompt.pendingKey) private var ratingPending = false
+    @Environment(\.requestReview) private var requestReview
 
     var body: some View {
         // Measured rather than inferred: the size class alone cannot tell a
@@ -57,6 +61,27 @@ struct RootView: View {
                     insets: insets)
         }
         .background(HingeProbe(observer: hinge).accessibilityHidden(true))
+        // A flag left from a run that ended before the prompt went out would
+        // never change again, so `onChange` would never fire. Drop it; the
+        // next good session sets it afresh.
+        .task { if ratingPending { ratingPending = false } }
+        .onChange(of: ratingPending) { _, pending in
+            guard pending else { return }
+            Task {
+                // Let the terminal finish leaving before anything appears.
+                try? await Task.sleep(for: .milliseconds(800))
+                // Never over a shell. A terminal that replaced this one (a host
+                // switch, a fold, a resize) skips the ask; the next good session
+                // that ends with nothing on screen raises it again.
+                guard ratingPending else { return }
+                guard TerminalPresence.visible == 0 else {
+                    ratingPending = false
+                    return
+                }
+                RatingPrompt().markAsked()
+                requestReview()
+            }
+        }
     }
 
     private func content(_ mode: NavigationMode, insets: EdgeInsets) -> some View {

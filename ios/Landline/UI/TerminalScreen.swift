@@ -39,6 +39,9 @@ struct TerminalScreen: View {
     /// Wall clock at the moment the session stopped, so the age readout freezes
     /// instead of counting a session that is no longer running.
     @State private var sessionEndedAt: Date?
+    /// Time this screen has spent with a live shell, for `RatingPrompt`.
+    @State private var liveSince: Date?
+    @State private var liveTotal: TimeInterval = 0
 
     /// Live grid size, updated when SwiftTerm re-lays-out. A rare event, so
     /// letting it invalidate the header costs nothing.
@@ -158,6 +161,7 @@ struct TerminalScreen: View {
         .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
         .onAppear {
+            TerminalPresence.visible += 1
             wireUpAndConnect()
             // After the representable has made its view. A hardware keyboard is
             // the normal case on an iPad and this is a terminal, so the
@@ -166,6 +170,12 @@ struct TerminalScreen: View {
         }
         .onDisappear {
             connection.disconnect(sendDetach: true)
+            TerminalPresence.visible = max(0, TerminalPresence.visible - 1)
+            let live = closeLiveSpan()
+            if !DemoSeed.isActive {
+                RatingPrompt().recordSession(liveFor: live,
+                                             hasAccess: purchases.access.status().hasFullAccess)
+            }
             // Both objects are stored in `@State` on this view *and* hold
             // closures that captured it, so each retains itself through its own
             // callback and neither deinit ever runs. Clearing them here is what
@@ -973,7 +983,22 @@ struct TerminalScreen: View {
         if DemoSeed.armsLeader { latches.leader = true }
     }
 
+    /// Folds any open live span into the total and returns the total.
+    @discardableResult
+    private func closeLiveSpan() -> TimeInterval {
+        if let since = liveSince {
+            liveTotal += Date().timeIntervalSince(since)
+            liveSince = nil
+        }
+        return liveTotal
+    }
+
     private func handleState(_ newState: Connection.State) {
+        if case .live = newState {
+            if liveSince == nil { liveSince = Date() }
+        } else {
+            closeLiveSpan()
+        }
         switch newState {
         case .live(let resp):
             attached = resp

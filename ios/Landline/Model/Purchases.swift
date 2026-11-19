@@ -303,7 +303,7 @@ final class Purchases {
 
     func products() async throws -> [PurchaseProduct] {
         [.init(id: LandlineProducts.trial, displayPrice: "$0.00", price: 0),
-         .init(id: LandlineProducts.unlock, displayPrice: "$2.99", price: 2.99)]
+         .init(id: LandlineProducts.unlock, displayPrice: "$6.99", price: 6.99)]
     }
     func entitlements() async throws -> PurchaseEntitlements {
         let length = LandlineProducts.trialDuration
