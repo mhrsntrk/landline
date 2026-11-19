@@ -442,6 +442,7 @@ async fn serve_attached(mut socket: WebSocket, state: &AppState, attachment: Att
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(buf))) => match ClientFrame::decode(&buf) {
                     Ok(ClientFrame::Stdin(data)) => {
+                        session.clear_attention();
                         // Child gone => stdin channel closed; EXIT arrives
                         // via rx, so a failed send is simply dropped.
                         let _ = session.stdin.send(data).await;
@@ -609,6 +610,11 @@ fn admin_response(manager: &SessionManager, outbox: &Outbox, line: &str) -> Stri
                         "attached": s.attached,
                         "last_seen": s.last_seen,
                         "idle_secs": now.saturating_sub(s.last_seen).max(0),
+                        "output_idle_secs": now.saturating_sub(s.last_output).max(0),
+                        "attention": s.attention.as_ref().map(|(at, text)| serde_json::json!({
+                            "secs_ago": now.saturating_sub(*at).max(0),
+                            "text": text,
+                        })),
                     })
                 })
                 .collect();
@@ -1126,6 +1132,47 @@ mod tests {
         .await;
         let output = collect_stdout_until(&mut second, "alive").await;
         assert!(output.contains("alive"), "{output}");
+    }
+
+    /// A program ringing the bell shows up on `/v1/sessions` as attention, and
+    /// the next keystroke from the client clears it.
+    #[tokio::test]
+    async fn a_bell_is_reported_as_attention_until_the_next_keystroke() {
+        let addr = start(test_config()).await;
+        let mut ws = connect(addr, Some(LOGIN)).await.expect("connect");
+        attach(&mut ws, None).await;
+        let token = mint_token(addr, "").await;
+
+        send(
+            &mut ws,
+            ClientFrame::Stdin(Bytes::from_static(b"printf 'x\\a'; echo rang-$((1+1))\n")),
+        )
+        .await;
+        collect_stdout_until(&mut ws, "rang-2").await;
+        let listed = http(addr, "GET", "/v1/sessions", Some(LOGIN), Some(&token), b"").await;
+        assert!(
+            listed.body.contains("\"attention\":{\"secs_ago\":"),
+            "the bell must be reported: {}",
+            listed.body
+        );
+        assert!(
+            listed.body.contains("\"output_idle_secs\":"),
+            "{}",
+            listed.body
+        );
+
+        send(
+            &mut ws,
+            ClientFrame::Stdin(Bytes::from_static(b"echo clear$((1+1))\n")),
+        )
+        .await;
+        collect_stdout_until(&mut ws, "clear2").await;
+        let listed = http(addr, "GET", "/v1/sessions", Some(LOGIN), Some(&token), b"").await;
+        assert!(
+            listed.body.contains("\"attention\":null"),
+            "a keystroke answers it: {}",
+            listed.body
+        );
     }
 
     #[tokio::test]
