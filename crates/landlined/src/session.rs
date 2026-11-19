@@ -17,7 +17,7 @@ use landline_proto::frame::{ErrCode, ServerFrame};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::{pty, ring};
+use crate::{attention, pty, ring};
 
 /// Capacity of the per-client outbound frame channel. A client that lets
 /// this many frames queue up is dropped as too slow.
@@ -56,6 +56,13 @@ pub struct Session {
     /// against the session TTL for unattached sessions.
     last_seen: AtomicI64,
     size: Mutex<(u16, u16)>,
+    /// Unix seconds of the last PTY output. Separate from `last_seen`, which
+    /// measures client attention and drives the reaper.
+    last_output: AtomicI64,
+    /// Unix seconds the program last asked for its user (see `attention`),
+    /// 0 for not since the last attach or keystroke.
+    attention_at: AtomicI64,
+    attention_text: Mutex<Option<String>>,
 }
 
 impl Session {
@@ -88,6 +95,8 @@ impl Session {
         tracing::debug!(id = %self.id, generation, replay = ring.len(), "client attached");
         drop(ring);
         self.touch();
+        // Someone is looking now.
+        self.clear_attention();
         (generation, rx, replay)
     }
 
@@ -134,6 +143,39 @@ impl Session {
     fn touch(&self) {
         self.last_seen.store(now_unix(), Ordering::Relaxed);
     }
+
+    /// The person answered: an attach, or a keystroke from the attached
+    /// client. A keystroke matters because a phone in a dead zone can look
+    /// attached for a while, which is the case the flag exists for.
+    pub fn clear_attention(&self) {
+        if self.attention_at.swap(0, Ordering::Relaxed) != 0 {
+            *self.attention_text.lock().unwrap() = None;
+        }
+    }
+
+    fn record_output(&self, signal: Option<attention::Signal>) {
+        let now = now_unix();
+        self.last_output.store(now, Ordering::Relaxed);
+        match signal {
+            None => {}
+            Some(attention::Signal::Bell) => {
+                // A bell keeps whatever text a notification already left.
+                self.attention_at.store(now, Ordering::Relaxed);
+            }
+            Some(attention::Signal::Notify(text)) => {
+                *self.attention_text.lock().unwrap() =
+                    if text.is_empty() { None } else { Some(text) };
+                self.attention_at.store(now, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn attention(&self) -> Option<(i64, Option<String>)> {
+        match self.attention_at.load(Ordering::Relaxed) {
+            0 => None,
+            at => Some((at, self.attention_text.lock().unwrap().clone())),
+        }
+    }
 }
 
 /// Everything a connection needs after a successful attach.
@@ -179,6 +221,10 @@ pub struct SessionInfo {
     pub created_at: i64,
     pub attached: bool,
     pub last_seen: i64,
+    /// Unix seconds of the last output.
+    pub last_output: i64,
+    /// When the program last asked for its user, and what it said, if it did.
+    pub attention: Option<(i64, Option<String>)>,
 }
 
 /// Shared registry of live sessions.
@@ -296,6 +342,9 @@ impl SessionManager {
             generation: AtomicU64::new(0),
             last_seen: AtomicI64::new(now),
             size: Mutex::new((args.cols, args.rows)),
+            last_output: AtomicI64::new(now),
+            attention_at: AtomicI64::new(0),
+            attention_text: Mutex::new(None),
         });
         {
             let mut sessions = self.inner.sessions.write().unwrap();
@@ -336,6 +385,8 @@ impl SessionManager {
                 created_at: s.created_at,
                 attached: s.attached(),
                 last_seen: s.last_seen(),
+                last_output: s.last_output.load(Ordering::Relaxed),
+                attention: s.attention(),
             })
             .collect()
     }
@@ -382,7 +433,10 @@ fn stale_sessions(inner: &Arc<Inner>, now: i64, ttl_secs: i64) -> Vec<Arc<Sessio
 /// attached client, then handles child exit.
 fn spawn_pump(inner: Arc<Inner>, session: Arc<Session>, mut events: pty::PtyEvents) {
     tokio::spawn(async move {
+        // Lives with the pump so its escape-sequence state spans chunks.
+        let mut scanner = attention::Scanner::new();
         while let Some(chunk) = events.output.recv().await {
+            session.record_output(scanner.feed(&chunk));
             // The ring lock is held across push-and-forward so an attach
             // (which installs its tx and snapshots under the same lock)
             // sees each chunk exactly once: in the snapshot or live.

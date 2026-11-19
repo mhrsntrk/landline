@@ -4,6 +4,7 @@
 compile_error!("the `harness` feature is dev-only; build it without --release");
 
 mod api;
+mod attention;
 mod auth;
 mod config;
 mod doctor;

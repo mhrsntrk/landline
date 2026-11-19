@@ -127,7 +127,7 @@ pub async fn token_handler(
         UnlockOutcome::Unlocked => {
             let token = state.tokens.issue(&login);
             tracing::info!(%login, "issued api token");
-            let mut features = vec!["sessions", "outbox"];
+            let mut features = vec!["sessions", "outbox", "attention"];
             if state.files.is_some() {
                 features.push("files");
             }
@@ -160,6 +160,17 @@ struct SessionResp {
     created_at: i64,
     attached: bool,
     idle_secs: i64,
+    /// Seconds since the program last wrote anything.
+    output_idle_secs: i64,
+    /// Set when the program rang the bell or sent a notification since the
+    /// last attach or keystroke.
+    attention: Option<AttentionResp>,
+}
+
+#[derive(serde::Serialize)]
+struct AttentionResp {
+    secs_ago: i64,
+    text: Option<String>,
 }
 
 /// `GET /v1/sessions`: what is running on this host, so the phone that
@@ -183,6 +194,11 @@ pub async fn sessions_handler(State(state): State<AppState>, headers: HeaderMap)
             created_at: info.created_at,
             attached: info.attached,
             idle_secs: (now - info.last_seen).max(0),
+            output_idle_secs: (now - info.last_output).max(0),
+            attention: info.attention.map(|(at, text)| AttentionResp {
+                secs_ago: (now - at).max(0),
+                text,
+            }),
         })
         .collect();
     // Newest first: the one you just lost is the one you are looking for.

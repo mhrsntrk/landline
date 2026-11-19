@@ -51,7 +51,7 @@ with no unlock configured.
   "token": "…64 hex chars…",
   "expires_in": 600,
   "max_bytes": 26214400,
-  "features": ["sessions", "outbox", "files"]
+  "features": ["sessions", "outbox", "attention", "files"]
 }
 ```
 
@@ -109,12 +109,32 @@ that looks finished to whatever is about to read it.
 
 ```json
 [ { "id": "…uuid…", "shell": "/bin/zsh", "created_at": 1757000000,
-    "attached": false, "idle_secs": 1428 } ]
+    "attached": false, "idle_secs": 1428, "output_idle_secs": 312,
+    "attention": { "secs_ago": 305, "text": "Approve command?" } } ]
 ```
 
 Newest first. The daemon has always known this; until now only a local process
 could ask, over the admin socket, which is exactly the machine you are not
 sitting at when it matters.
+
+`idle_secs` measures client attention (last attach or detach) and is what the
+reaper uses. `output_idle_secs` measures the program: seconds since the PTY last
+wrote anything, so a phone can tell a session that is still working from one
+that has gone quiet.
+
+`attention` is `null` unless the program asked for its user since the last
+attach or keystroke: a bare BEL outside any escape sequence, or a desktop
+notification escape (OSC 9, OSC 777 `notify`, OSC 99). `text` is the
+notification's text, cleaned to one line of at most 140 characters, or `null`
+for a plain bell. BELs that terminate an OSC (window titles) do not count, nor
+does OSC `9;4` (progress). Attaching, or any STDIN from the attached client,
+clears it.
+
+Whether a program sends either signal is up to the program. Claude Code 2.1.326
+at its defaults sent neither in a plain `xterm-256color` PTY; setting its
+`preferredNotifChannel` to `terminal_bell` is the documented way to make it
+ring. Daemons from 0.5.0 serve both fields and list `attention` in `features`;
+older ones omit them.
 
 ### `DELETE /v1/sessions/{id}`
 
