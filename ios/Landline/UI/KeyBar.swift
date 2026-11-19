@@ -174,6 +174,7 @@ struct KeyBar: View {
         .buttonStyle(KeyCellStyle(latched: false))
         .disabled(open == nil)
         .accessibilityLabel(Text(key.accessibility))
+        .accessibilityShowsLargeContentViewer()
     }
 
     /// The bytes are worked out here rather than when the layout was read,
@@ -190,6 +191,7 @@ struct KeyBar: View {
         if key.repeats, let bytes, !bytes.isEmpty, let send {
             RepeatingKeyCell(key: key, bytes: bytes, send: send)
                 .accessibilityLabel(label)
+                .accessibilityShowsLargeContentViewer()
         } else {
             Button {
                 if let bytes, !bytes.isEmpty { send?(bytes) }
@@ -199,6 +201,7 @@ struct KeyBar: View {
             .buttonStyle(KeyCellStyle(latched: false))
             .disabled(bytes == nil)
             .accessibilityLabel(label)
+            .accessibilityShowsLargeContentViewer()
         }
     }
 
@@ -217,6 +220,7 @@ struct KeyBar: View {
         // off rather than as armable.
         .disabled(!enabled)
         .accessibilityLabel(Text(key.accessibility))
+        .accessibilityShowsLargeContentViewer()
         .accessibilityValue(Text(isOn.wrappedValue ? "armed" : "off"))
         .accessibilityAddTraits(isOn.wrappedValue ? [.isSelected] : [])
     }
@@ -367,7 +371,7 @@ private struct KeyCellStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.llMicroLabel)
+                .llFont(.micro)
                 .tracking(0.8)
                 .foregroundStyle(foreground)
                 .lineLimit(1)

@@ -241,7 +241,7 @@ struct SnippetEditView: View {
                 // back. Mono, because every character of it is going to a
                 // shell and the alignment is the proofreading.
                 TextEditor(text: $text)
-                    .font(.llValue)
+                    .llFont(.value)
                     .foregroundStyle(Theme.inkBright)
                     .tint(Theme.accent)
                     .scrollContentBackground(.hidden)

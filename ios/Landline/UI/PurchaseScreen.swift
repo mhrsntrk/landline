@@ -111,7 +111,9 @@ struct PurchaseScreen: View {
             }
             HStack(spacing: Theme.Metric.gutter) {
                 Link("PRIVACY", destination: URL(string: "https://github.com/mhrsntrk/landline/blob/main/docs/PRIVACY.md")!)
+                    .frame(minHeight: Theme.Metric.hitTarget)
                 Link("SUPPORT", destination: URL(string: "https://github.com/mhrsntrk/landline/issues")!)
+                    .frame(minHeight: Theme.Metric.hitTarget)
             }
             .llValue(Theme.accent)
         }

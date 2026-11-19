@@ -525,7 +525,7 @@ struct TerminalScreen: View {
             HStack(spacing: Theme.Metric.grid * 3) {
                 SecureField("", text: $typedSecret)
                     .textContentType(.password)
-                    .font(.llValue)
+                    .llFont(.value)
                     .foregroundStyle(Theme.inkBright)
                     .tint(Theme.accent)
                     .focused($secretFocused)

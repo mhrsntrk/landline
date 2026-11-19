@@ -114,7 +114,7 @@ struct HostEditView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     section("MACHINE") {
                         FieldRow(label: "NAME", annotation: "OPTIONAL") {
-                            TextField("", text: $host.name, prompt: prompt("studio"))
+                            TextField("Name", text: $host.name, prompt: prompt("studio"))
                                 .focused($focusedField, equals: .name)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
@@ -125,7 +125,7 @@ struct HostEditView: View {
                             annotation: "TAILNET",
                             error: shouldShow(.hostname) ? error(for: "hostname") : nil
                         ) {
-                            TextField("", text: $host.hostname, prompt: prompt(Host.tailnetExample))
+                            TextField("Hostname", text: $host.hostname, prompt: prompt(Host.tailnetExample))
                                 .focused($focusedField, equals: .hostname)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
@@ -137,7 +137,7 @@ struct HostEditView: View {
                             annotation: "1-65535",
                             error: shouldShow(.port) ? portError : nil
                         ) {
-                            TextField("", text: $portText, prompt: prompt("443"))
+                            TextField("Port", text: $portText, prompt: prompt("443"))
                                 .focused($focusedField, equals: .port)
                                 .keyboardType(.numberPad)
                                 .llMeasuredColumn() // a port is a measured value, not prose
@@ -161,7 +161,7 @@ struct HostEditView: View {
 
                     section("SESSION") {
                         FieldRow(label: "STARTUP COMMAND", annotation: "OPTIONAL") {
-                            TextField("", text: $host.startCommand,
+                            TextField("Startup command", text: $host.startCommand,
                                       prompt: prompt("tmux new -A -s main"))
                                 .focused($focusedField, equals: .startCommand)
                                 .textInputAutocapitalization(.never)

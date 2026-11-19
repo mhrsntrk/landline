@@ -1865,6 +1865,9 @@ struct SwiftTermView: UIViewRepresentable {
 
         let view = LandlineTerminalView(frame: .zero, font: nil, options: options)
         view.terminalDelegate = context.coordinator
+        // SwiftTerm's view carries no name of its own, so VoiceOver announced
+        // an unlabeled text view. Its contents stay readable as text.
+        view.accessibilityLabel = "Terminal"
         // SwiftTerm ships its own grey, rounded, iOS-styled key strip as the
         // input accessory. This app draws that keypad itself, in world; two of
         // them stacked is both a duplicate and a DESIGN.md violation.

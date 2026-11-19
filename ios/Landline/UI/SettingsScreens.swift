@@ -142,7 +142,7 @@ struct SettingsView: View {
             withAnimation(Theme.Motion.state) { settings.setScrollSpeed(step) }
         } label: {
             Text(step.label)
-                .font(.llValue)
+                .llFont(.value)
                 .foregroundStyle(selected ? Theme.inkBright : Theme.ink)
                 .frame(maxWidth: .infinity)
                 .frame(height: Theme.Metric.hitTarget)
@@ -289,7 +289,7 @@ struct KeyBarSettingsView: View {
                     Text("?")
                 }
             }
-            .font(.llMicroLabel)
+            .llFont(.micro)
             .tracking(0.8)
             .foregroundStyle(key.resolved == nil ? Theme.alertText : Theme.inkBright)
             .lineLimit(1)
@@ -423,7 +423,7 @@ struct KeyBarCatalogView: View {
         } label: {
             HStack(spacing: Theme.Metric.grid * 3) {
                 Text(entry.label)
-                    .font(.llMicroLabel)
+                    .llFont(.micro)
                     .tracking(0.8)
                     .foregroundStyle(Theme.inkBright)
                     .lineLimit(1)
@@ -534,7 +534,7 @@ struct KeyBarKeyView: View {
                         .focused($focused, equals: .sequence)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .font(.llValue)
+                        .llFont(.value)
                 }
 
                 bytesPlate
@@ -597,7 +597,7 @@ struct KeyBarKeyView: View {
                     Text("?")
                 }
             }
-            .font(.llMicroLabel)
+            .llFont(.micro)
             .tracking(0.8)
             .foregroundStyle(preview == nil ? Theme.alertText : Theme.inkBright)
             .lineLimit(1)
@@ -842,7 +842,7 @@ struct SquareGlyphButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.llValue)
+                .llFont(.value)
                 .foregroundStyle(isEnabled ? tint : Theme.inkDim)
                 .frame(width: 32, height: 32)
                 .background(configuration.isPressed ? Theme.raised : Color.clear)
