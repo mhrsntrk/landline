@@ -21,7 +21,9 @@
 //! What an agent actually sends depends on its own settings. Claude Code
 //! 2.1.326 at its defaults sent neither signal in a plain xterm-256color PTY,
 //! so a badge only appears for programs configured to ring the bell (for
-//! Claude Code, `preferredNotifChannel` set to `terminal_bell`).
+//! Claude Code, `"preferredNotifChannel": "terminal_bell"` in its
+//! `settings.json`). Inside tmux only the BEL arrives: tmux forwards a pane's
+//! bell to its client but swallows OSC notifications.
 
 /// The most of an OSC payload kept. Longer ones are skipped, not truncated:
 /// a notification body that size is not one line on a phone anyway, and the

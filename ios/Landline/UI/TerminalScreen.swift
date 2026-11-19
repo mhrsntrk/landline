@@ -42,6 +42,9 @@ struct TerminalScreen: View {
     /// Time this screen has spent with a live shell, for `RatingPrompt`.
     @State private var liveSince: Date?
     @State private var liveTotal: TimeInterval = 0
+    /// This screen saw NEED_UNLOCK. A secret typed at that prompt is never
+    /// stored, so such a host must not be remembered as needing none.
+    @State private var askedForUnlock = false
 
     /// Live grid size, updated when SwiftTerm re-lays-out. A rare event, so
     /// letting it invalidate the header costs nothing.
@@ -996,11 +999,16 @@ struct TerminalScreen: View {
     private func handleState(_ newState: Connection.State) {
         if case .live = newState {
             if liveSince == nil { liveSince = Date() }
-            // Attached with no stored secret: this host needs none, so the
-            // host list may ask it what is waiting without risking a guess.
-            if Keychain.unlockSecret(hostID: host.id) == nil { OpenHosts.mark(host.id, open: true) }
+            // Attached without any unlock: this host needs none, so the host
+            // list may ask it what is waiting without risking a guess.
+            if !askedForUnlock, Keychain.unlockSecret(hostID: host.id) == nil {
+                OpenHosts.mark(host.id, open: true)
+            }
         } else {
-            if case .needsUnlock = newState { OpenHosts.mark(host.id, open: false) }
+            if case .needsUnlock = newState {
+                askedForUnlock = true
+                OpenHosts.mark(host.id, open: false)
+            }
             closeLiveSpan()
         }
         switch newState {

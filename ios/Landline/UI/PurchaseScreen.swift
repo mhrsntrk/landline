@@ -110,10 +110,14 @@ struct PurchaseScreen: View {
                     .llProse(Theme.inkMuted).fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: Theme.Metric.gutter) {
-                Link("PRIVACY", destination: URL(string: "https://github.com/mhrsntrk/landline/blob/main/docs/PRIVACY.md")!)
-                    .frame(minHeight: Theme.Metric.hitTarget)
-                Link("SUPPORT", destination: URL(string: "https://github.com/mhrsntrk/landline/issues")!)
-                    .frame(minHeight: Theme.Metric.hitTarget)
+                // The frame goes on the label: around a Link it widens the
+                // layout but not what a finger can hit.
+                Link(destination: URL(string: "https://github.com/mhrsntrk/landline/blob/main/docs/PRIVACY.md")!) {
+                    Text("PRIVACY").frame(minHeight: Theme.Metric.hitTarget).contentShape(Rectangle())
+                }
+                Link(destination: URL(string: "https://github.com/mhrsntrk/landline/issues")!) {
+                    Text("SUPPORT").frame(minHeight: Theme.Metric.hitTarget).contentShape(Rectangle())
+                }
             }
             .llValue(Theme.accent)
         }

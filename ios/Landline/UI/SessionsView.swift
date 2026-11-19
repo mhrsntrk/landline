@@ -124,7 +124,8 @@ struct SessionsView: View {
 
     private func message(_ label: String, _ body: String, isError: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: Theme.Metric.grid * 4) {
-            MicroLabel(label, color: isError ? Theme.alert : Theme.inkMuted)
+            // `alert` is 4.38:1 and never carries text (DESIGN.md).
+            MicroLabel(label, color: isError ? Theme.alertText : Theme.inkMuted)
             proseText(body)
                 .llProse(isError ? Theme.alertText : Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)

@@ -115,6 +115,7 @@ struct HostEditView: View {
                     section("MACHINE") {
                         FieldRow(label: "NAME", annotation: "OPTIONAL") {
                             TextField("Name", text: $host.name, prompt: prompt("studio"))
+                                .accessibilityLabel(Text("Name"))
                                 .focused($focusedField, equals: .name)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
@@ -126,6 +127,7 @@ struct HostEditView: View {
                             error: shouldShow(.hostname) ? error(for: "hostname") : nil
                         ) {
                             TextField("Hostname", text: $host.hostname, prompt: prompt(Host.tailnetExample))
+                                .accessibilityLabel(Text("Hostname"))
                                 .focused($focusedField, equals: .hostname)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
@@ -138,6 +140,7 @@ struct HostEditView: View {
                             error: shouldShow(.port) ? portError : nil
                         ) {
                             TextField("Port", text: $portText, prompt: prompt("443"))
+                                .accessibilityLabel(Text("Port"))
                                 .focused($focusedField, equals: .port)
                                 .keyboardType(.numberPad)
                                 .llMeasuredColumn() // a port is a measured value, not prose
@@ -163,6 +166,7 @@ struct HostEditView: View {
                         FieldRow(label: "STARTUP COMMAND", annotation: "OPTIONAL") {
                             TextField("Startup command", text: $host.startCommand,
                                       prompt: prompt("tmux new -A -s main"))
+                                .accessibilityLabel(Text("Startup command"))
                                 .focused($focusedField, equals: .startCommand)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
