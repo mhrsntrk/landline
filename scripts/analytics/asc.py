@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Minimal App Store Connect API client (ES256 JWT signed by hand)."""
-import json, time, base64, sys, urllib.request, urllib.error, gzip, io
+import os, json, time, base64, sys, urllib.request, urllib.error, gzip, io
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, utils as asym_utils
 
-CFG = json.load(open("/Users/mhrsntrk/.ascelerate/config.json"))
-KEY = serialization.load_pem_private_key(open(CFG["privateKeyPath"], "rb").read(), password=None)
+CFG = json.load(open(os.path.expanduser("~/.ascelerate/config.json")))
+KEY = serialization.load_pem_private_key(open(os.path.expanduser(CFG["privateKeyPath"]), "rb").read(), password=None)
 
 
 def b64u(b):
