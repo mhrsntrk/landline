@@ -26,6 +26,7 @@ struct HostListView: View {
     private var isSidebar: Bool { selection != nil }
 
     @State private var reachability = HostReachability()
+    @State private var activity = HostActivity()
     @State private var editingHost: Host?
     @State private var showingAddSheet = false
     @State private var openedHost: Host?
@@ -178,11 +179,22 @@ struct HostListView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
                 now = Date()
+                refreshActivity(store.hosts)
             }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { reachability.probe(store.hosts) }
         }
+        // Ask a host what is waiting as soon as it is known to answer, rather
+        // than on the next 30 second tick.
+        .onChange(of: reachability.diagnoses) { old, new in
+            let arrived = store.hosts.filter { new[$0.id] == .reachable && old[$0.id] != .reachable }
+            if !arrived.isEmpty { refreshActivity(arrived) }
+        }
+    }
+
+    private func refreshActivity(_ hosts: [Host]) {
+        activity.refresh(hosts) { reachability.diagnosis(for: $0) == .reachable }
     }
 
     // MARK: - Header
@@ -283,6 +295,7 @@ struct HostListView: View {
                     HostRow(host: host,
                             diagnosis: reachability.diagnosis(for: host),
                             now: now,
+                            waiting: activity.count(for: host),
                             dense: isSidebar)
                         .background { extentReporter }
                 }
@@ -476,6 +489,8 @@ private struct HostRow: View {
     let host: Host
     let diagnosis: HostDiagnosis
     let now: Date
+    /// Sessions on this host waiting on their user (`HostActivity`).
+    var waiting: Int = 0
 
     private var level: StatusSquare.Level { diagnosis.level }
     /// The sidebar column, at roughly two thirds of the width the same row gets
@@ -492,6 +507,13 @@ private struct HostRow: View {
                 nameLine
                 endpointLine
                 if dense { denseFlags }
+                if waiting > 0 {
+                    // Never the program's text here: a host behind Face ID
+                    // shows that something is waiting, not what it said.
+                    MicroLabel(waiting == 1 ? "NEEDS YOU" : "\(waiting) SESSIONS NEED YOU",
+                               color: Theme.warn)
+                        .llMeasuredColumn()
+                }
                 // Only when there is something to say. A row that is answering
                 // stays two lines; a row that is not tells you which of the
                 // four things went wrong, because "offline" is a fact nobody
@@ -512,6 +534,7 @@ private struct HostRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(
             "\(host.displayName), \(host.hostname), \(diagnosis.label ?? level.label)"
+                + (waiting > 0 ? ", needs you" : "")
         ))
     }
 
@@ -907,7 +930,9 @@ enum DemoSeed {
 
     /// Debug hook for checking the rating prompt end to end: open the
     /// terminal, keep it live past `RatingPrompt.minimumLive`, then go back.
-    static var closesTerminalAfterAMinute: Bool { mode == "rating" }
+    /// `liveattention` does the same against the live demo host, so a bell
+    /// rung meanwhile shows up as a badge on the real host list.
+    static var closesTerminalAfterAMinute: Bool { mode == "rating" || mode == "liveattention" }
     @MainActor static var terminalOpened = false
 
     /// Debug screenshot hook: open the edit sheet straight away, since a
@@ -964,7 +989,7 @@ enum DemoSeed {
     /// Deliberately never 7777: that is where a real daemon listens, and a
     /// screenshot run has no business connecting to it.
     static var seedsLiveHost: Bool {
-        mode == "live" || mode == "liveresize" || mode == "liveleader" || switchesHosts
+        mode == "live" || mode == "liveresize" || mode == "liveleader" || mode == "liveattention" || switchesHosts
             || attachesAFile
     }
 
@@ -1109,6 +1134,18 @@ enum DemoSeed {
         three.lastAttachedAt = Date().addingTimeInterval(-2 * 86_400)
         for host in [one, two, three] { store.add(host) }
         for host in extraHosts { store.add(host) }
+        #endif
+    }
+
+    /// The `attention` still shows the first host waiting on its user. Every
+    /// other demo run shows none, so existing stills do not change.
+    static func scriptedWaiting(for hosts: [Host]) -> [UUID: Int]? {
+        #if DEBUG
+        guard mode != nil, !seedsLiveHost else { return nil }
+        guard mode == "attention", let first = hosts.first else { return [:] }
+        return [first.id: 1]
+        #else
+        return nil
         #endif
     }
 

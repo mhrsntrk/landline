@@ -309,8 +309,10 @@ actor HostAPI {
                 expires: Date().addingTimeInterval(TimeInterval(parsed.expiresIn))
             )
             grants[host.id] = grant
+            if secret.isEmpty { OpenHosts.mark(host.id, open: true) }
             return grant
         case 401:
+            if secret.isEmpty { OpenHosts.mark(host.id, open: false) }
             struct ErrResp: Decodable { let attemptsLeft: Int? }
             let attempts = (try? JSONDecoder.snakeCase.decode(ErrResp.self, from: body))?.attemptsLeft
             let error = UploadError.badSecret(attemptsLeft: attempts ?? 0)
@@ -410,6 +412,20 @@ struct HostSession: Decodable, Identifiable, Hashable {
     let createdAt: Int
     let attached: Bool
     let idleSecs: Int
+    /// Seconds since the program last wrote anything. Nil from a daemon
+    /// before 0.5.0.
+    var outputIdleSecs: Int?
+    /// Set when the program rang the bell or sent a notification since the
+    /// last attach or keystroke. Nil from a daemon before 0.5.0, too.
+    var attention: Attention?
+
+    struct Attention: Decodable, Hashable {
+        let secsAgo: Int
+        let text: String?
+    }
+
+    /// Output in the last ten seconds: still working.
+    var isActive: Bool { (outputIdleSecs ?? .max) < 10 }
 
     /// Just the shell's basename, because a column is narrow.
     var shellLabel: String { (shell as NSString).lastPathComponent }

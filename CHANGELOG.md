@@ -13,6 +13,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   anything) and `attention`, set when a program rings the bell or sends a desktop notification
   escape (OSC 9, OSC 777, OSC 99) and cleared by an attach or a keystroke. BELs that end an OSC,
   such as window titles, are not counted. `features` lists `attention`.
+- iOS 1.5: the host list marks a machine NEEDS YOU when a session there rang the bell or sent a
+  notification (daemon 0.5.0), and the session list shows the program's text and how long ago
+  it last wrote output. The list only asks hosts whose secret is stored or that were seen to need
+  none, so polling never spends an unlock attempt.
 - iOS 1.5: after three sessions that each held a live shell for a minute, closing the terminal
   offers the system rating prompt, once per version and only while the trial or unlock is
   active. Screenshot runs never trigger it.

@@ -996,7 +996,11 @@ struct TerminalScreen: View {
     private func handleState(_ newState: Connection.State) {
         if case .live = newState {
             if liveSince == nil { liveSince = Date() }
+            // Attached with no stored secret: this host needs none, so the
+            // host list may ask it what is waiting without risking a guess.
+            if Keychain.unlockSecret(hostID: host.id) == nil { OpenHosts.mark(host.id, open: true) }
         } else {
+            if case .needsUnlock = newState { OpenHosts.mark(host.id, open: false) }
             closeLiveSpan()
         }
         switch newState {
