@@ -29,8 +29,8 @@ App Store purchases separately, as described below.
 The Documents folder is private to the app, but iOS includes it in your own
 iCloud or Finder backup of the device. Those backups are yours and Apple's to
 manage; the developer never receives them. The unlock secret is stored with
-the Keychain's "this device only" setting, so it is not included in backups
-and does not sync to your other devices.
+the Keychain's "this device only" setting, so it does not sync to your other
+devices and cannot be restored onto a different device.
 
 Deleting the app removes its local files. Keychain entries may persist under
 iOS's Keychain rules. There is no backup on our side to delete, because we never
