@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Landline collects nothing and tracks nothing (docs/PRIVACY.md).
+
+  Required-reason APIs actually used, including by SwiftTerm, which is linked
+  statically and ships no manifest of its own:
+  - UserDefaults (CA92.1): app-only preferences such as the rating prompt
+    state, trial reminder choice and terminal font size.
+  - File timestamp APIs (C617.1): HostAPI.sweepFetchedOffers reads
+    contentModificationDate of files in the app's own temporary directory, and
+    SwiftTerm's kitty graphics code calls stat/fstat on image files it is
+    handed. Neither is shown to the user or leaves the device.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
